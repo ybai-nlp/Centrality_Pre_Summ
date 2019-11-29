@@ -8,6 +8,8 @@ import distributed
 from models.reporter_ext import ReportMgr, Statistics
 from others.logging import logger
 from others.utils import test_rouge, rouge_results_to_str
+from models.loss import PairwiseLoss
+
 
 
 def _tally_parameters(model):
@@ -100,7 +102,8 @@ class Trainer(object):
         self.gpu_rank = gpu_rank
         self.report_manager = report_manager
 
-        self.loss = torch.nn.BCELoss(reduction='none')
+        # self.loss = torch.nn.BCELoss(reduction='none')
+        self.loss = PairwiseLoss()
         assert grad_accum_count > 0
         # Set model in training mode.
         if (model):
@@ -324,8 +327,16 @@ class Trainer(object):
             sent_scores, mask = self.model(src, segs, clss, mask, mask_cls)
 
             loss = self.loss(sent_scores, labels.float())
-            loss = (loss * mask.float()).sum()
+
+            # loss = (loss * mask.float()).sum()
+            loss = loss.sum()
+            # 做了个平均 numel返回number of elements
             (loss / loss.numel()).backward()
+            # print("loss", loss.size())
+            # print(loss)
+            # print("mask", mask.size())
+            # print(mask)
+            # exit()
             # loss.div(float(normalization)).backward()
 
             batch_stats = Statistics(float(loss.cpu().data.numpy()), normalization)

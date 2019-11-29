@@ -190,6 +190,73 @@ class LabelSmoothingLoss(nn.Module):
         return F.kl_div(output, model_prob, reduction='sum')
 
 
+
+
+class PairwiseLoss(nn.Module):
+    """
+    The pairwise loss between the label and the prediction
+    KL-divergence between q_{smoothed ground truth prob.}(w)
+    and p_{prob. computed by model}(w) is minimized.
+    """
+    def __init__(self):
+        super(PairwiseLoss, self).__init__()
+        self.loss = torch.nn.BCELoss(reduction='none')
+
+    def forward(self, output, target):
+        """
+        output (FloatTensor): batch_size x n_classes
+        target (LongTensor): batch_size
+        """
+        # model_prob = self.one_hot.repeat(target.size(0), 1)
+        # model_prob.scatter_(1, target.unsqueeze(1), self.confidence)
+        # model_prob.masked_fill_((target == self.padding_idx).unsqueeze(1), 0)
+        # print("output ", output.size())
+        # print(output)
+        # print("output repeat", output.repeat(1, output.size(1)).resize(output.size(0), output.size(1), output.size(1)).size())
+        mask = output.eq(0).float()
+        tmp = torch.ones(output.size(0), output.size(1)).to('cuda')
+        mask = (tmp - mask).unsqueeze(1)
+        # print("mask ", mask.size())
+        # print(mask)
+        mask = torch.bmm(mask.transpose(1,2), mask)
+        # print("mask ", mask.size())
+        # print(mask)
+        output_ = output.repeat(1, output.size(1)).resize(output.size(0), output.size(1), output.size(1))
+        # print(output_)
+        outputt = output.unsqueeze(1).transpose(1,2)
+        outputt = outputt.repeat(1,1,outputt.size(1))
+        pairwise_output = nn.functional.sigmoid(outputt - output_) * mask
+        # print("pairwise_output", pairwise_output.size())
+        # print(pairwise_output)
+        # print("outputt ", outputt.size())
+        # print(outputt)
+
+        # print("target")
+        # print(target)
+        target1 = torch.zeros(pairwise_output.size()).to('cuda')
+        for i in range(target1.size(0)):
+            for j in range(target1.size(1)):
+                for k in range(target1.size(2)):
+                    if target[i][j] > target[i][k]:
+                        target1[i][j][k] = 1
+                    elif target[i][j] < target[i][k]:
+                        target1[i][j][k] = 0
+                    else:
+                        target1[i][j][k] = 0.5
+        target1 = target1 * mask
+        # print("target", target1.size())
+        # print(target1)
+
+        loss = self.loss(pairwise_output, target1) * mask
+        # print("loss", loss.size())
+        # print(loss)
+        # exit()
+        # return F.kl_div(output, model_prob, reduction='sum')
+        return loss
+
+
+
+
 class NMTLossCompute(LossComputeBase):
     """
     Standard NMT Loss Computation.

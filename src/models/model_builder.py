@@ -479,9 +479,9 @@ class ExtSummarizer(nn.Module):
         # print(sents_vec)
         # 得到sentence的评分
         # batchsize * sentencenum
-        print("sents scores = ", sent_scores.size())
-        print(sent_scores)
-        exit()
+        # print("sents scores = ", sent_scores.size())
+        # print(sent_scores)
+        # exit()
         if self.args.task == "ext":
             return sent_scores, mask_cls
         elif self.args.task == "hybrid":
