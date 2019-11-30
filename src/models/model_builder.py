@@ -137,8 +137,8 @@ class Bert(nn.Module):
         if(large):
             self.model = BertModel.from_pretrained('bert-large-uncased', cache_dir=temp_dir)
         else:
-        # self.model = BertModel.from_pretrained('bert-base-uncased', cache_dir=temp_dir)
-            self.model = BertModel.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', cache_dir=temp_dir)
+            self.model = BertModel.from_pretrained('bert-base-uncased', cache_dir=temp_dir)
+        #     self.model = BertModel.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', cache_dir=temp_dir)
 
         self.finetune = finetune
 
