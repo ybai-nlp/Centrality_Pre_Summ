@@ -114,10 +114,15 @@ if __name__ == '__main__':
         '--is_debugging',
         action='store_true',
         help='turn the model into debug model')
-    parser.add_argument(
-        '--pair_wise_loss',
-        action='store_true',
-        help='use pair')
+    # parser.add_argument(
+    #     '--threshold_control',
+    #     action='store_true',
+    #     help='use threshold to control the model')
+    parser.add_argument("-control", default='None', type=str, choices=['None', 'Sim', 'Nov', 'Rel'])
+    # parser.add_argument(
+    #     '--pair_wise_loss',
+    #     action='store_true',
+    #     help='use pair')
     args = parser.parse_args()
     args.gpu_ranks = [int(i) for i in range(len(args.visible_gpus.split(',')))]
     args.world_size = len(args.gpu_ranks)

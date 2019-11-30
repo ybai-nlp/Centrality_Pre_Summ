@@ -138,7 +138,7 @@ class Bert(nn.Module):
             self.model = BertModel.from_pretrained('bert-large-uncased', cache_dir=temp_dir)
         else:
             self.model = BertModel.from_pretrained('bert-base-uncased', cache_dir=temp_dir)
-        #     self.model = BertModel.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', cache_dir=temp_dir)
+            # self.model = BertModel.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', cache_dir=temp_dir)
 
         self.finetune = finetune
 
@@ -222,11 +222,12 @@ class ExtSummarizer(nn.Module):
         for i in range(sent_vec.size(0)): #对于每一个batch
             # print("sent_vec ", sent_vec.size())
             # exit()
-            Score_Cont = torch.mm(self.W_cont, sent_vec[i].transpose(0, 1))
+            # 这里需要纵向的向量，横向向量最后加和的时候有问题，和novelty不一致
+            Score_Cont = torch.mm(self.W_cont, sent_vec[i].transpose(0, 1)).transpose(0,1) * mask_cls[i].transpose(0,1)
             tmp_Sim = torch.mm(sent_vec[i], self.W_sim)
             Score_Sim = torch.mm(tmp_Sim, sent_vec[i].transpose(0, 1)) * mask_my_own[i]
             tmp_rel = torch.mm(sent_vec[i], self.W_rel)
-            Score_rel = torch.mm(tmp_rel, d_rep[i]).transpose(0, 1)
+            Score_rel = torch.mm(tmp_rel, d_rep[i]).transpose(0, 1).transpose(0,1) * mask_cls[i].transpose(0,1)
             # Score_Sim = torch.mm(tmp_Sim, sent_vec.transpose(1, 2)) * mask_my_own[i]
             # print("score_cont ", Score_Cont.size())
             # print(Score_Cont)
@@ -235,6 +236,15 @@ class ExtSummarizer(nn.Module):
             # print(Score_Sim)
             # print("score_rel ", Score_rel.size())
             # print(Score_rel)
+            #
+            #
+            # print("score_cont ", Score_Cont.size())
+            # print(Score_Cont)
+
+
+
+
+
             q = Score_rel + Score_Cont + Score_Sim + self.b_matrix
             q = q * mask_my_own[i]
             # print("q before ", q.size())
@@ -245,33 +255,83 @@ class ExtSummarizer(nn.Module):
             # 计算novelty
             # print(sent_vec[i][0].size())
             # print(self.W_novel.size())
-            tmp_nov = torch.mm(sent_vec[i][0].unsqueeze(0), self.W_novel)
+            # tmp_nov = torch.mm(sent_vec[i][0].unsqueeze(0), self.W_novel)
 
             # print(q[0].sum())
             # print("第一项")
             # print(tmp_nov.size())
             # print("第二项")
             # print(((q[0].sum() / sent_num[i]) * sent_vec[i][0]).size())
-            accumulation = torch.mm(tmp_nov, nn.functional.tanh(((q[0].sum() / sent_num[i]) * sent_vec[i][0]).unsqueeze(0).transpose(0,1)))
+            # accumulation = torch.mm(tmp_nov, nn.functional.tanh(((q[0].sum() / sent_num[i]) * sent_vec[i][0]).unsqueeze(0).transpose(0,1)))
+
+            # ! 重要：这里要过sigmoid做mask
+            Score_Nov = torch.zeros(1,1).to('cuda')
+
+
             for j, each_row in enumerate(q):
                 if j == 0:
+                    accumulation = (q[j].sum() / sent_num[i]) * sent_vec[i][j]
                     continue
                 # print("q[",j,"] before:", q[j].size())
                 # print(q[j])
                 # print("accumulation ", accumulation)
                 # exit()
-                q[j] = (q[j] + accumulation) * mask_cls[i]
+                tmp_nov = torch.mm(sent_vec[i][j].unsqueeze(0), self.W_novel)
+                tmp_h_w_nov = torch.mm(tmp_nov, nn.functional.tanh(accumulation).unsqueeze(0).transpose(0,1))
+                # print("tmp_h_w_nov", tmp_h_w_nov.size())
+                # print(tmp_h_w_nov)
+                Score_Nov = torch.cat((Score_Nov, tmp_h_w_nov), dim=1)
+
+
+                q[j] = (q[j] - tmp_h_w_nov) * mask_cls[i]
                 # print("q[",j,"] after:", q[j].size())
                 # print(q[j])
-                tmp_nov = torch.mm(sent_vec[i][j].unsqueeze(0), self.W_novel)
-                accumulation += torch.mm(tmp_nov, nn.functional.tanh(((q[j].sum() / sent_num[i]) * sent_vec[i][j]).unsqueeze(0).transpose(0,1)))
+                accumulation += (q[j].sum() / sent_num[i]) * sent_vec[i][j]
                 # print("accumalation1: ",accumulation)
 
 
             q = nn.functional.sigmoid(q) * mask_my_own[i]
+            Score_Nov = Score_Nov.transpose(0, 1)
+
+            if self.args.control != 'None':
+                # print("using threshold_control")
+                threshold_list = []
+                for j in range(Score_Sim.size(0)):
+                    tmp_list = []
+                    for k in range(Score_Sim.size(1)):
+                        tmp_list.append(0.5)
+                    threshold_list.append(tmp_list)
+                threshold_tensor = torch.Tensor(threshold_list).to('cuda') * mask_my_own[i]
+                # print("threshold_tensor", threshold_tensor.size())
+                # print(threshold_tensor)
+                if self.args.control == 'Rel':
+                    Score_rel_Control = nn.functional.sigmoid(Score_rel).ge(threshold_tensor).float() * mask_my_own[i]
+                    if Score_rel_Control.det() != 0:
+                        q = q * Score_rel_Control
+                elif self.args.control == 'Sim':
+                    Score_Sim_Control = nn.functional.sigmoid(Score_Sim).ge(threshold_tensor).float() * mask_my_own[i]
+                    if Score_Sim_Control.det() != 0:
+                        q = q * Score_Sim_Control
+                elif self.args.control == 'Nov':
+                    Score_Nov_Control = nn.functional.sigmoid(Score_Nov).le(threshold_tensor).float() * mask_my_own[i]
+                    if Score_Nov_Control.det() != 0:
+                        q = q * Score_Nov_Control
+
+
+
+            #
+
+            # print("Score_Nov", Score_Nov.size())
+            # print(Score_Nov)
+            # print("score_sim ", Score_Sim.size())
+            # print(Score_Sim)
+            # print("score_rel ", Score_rel.size())
+            # print(Score_rel)
             # print("q ", q.size())
             # print(q)
-                # exit()
+            #
+            #
+            # exit()
 
 
             # print("q", q.size())
@@ -295,11 +355,12 @@ class ExtSummarizer(nn.Module):
             # print("true_dim = ", int(true_dim))
             tmp_D = D[:true_dim, :true_dim]
             tmp_q = q[:true_dim, :true_dim]
+            # print("tmp D = ", tmp_D)
             D_ = torch.inverse(tmp_D)
             I = torch.eye(true_dim).to(self.device)
-            # print(tmp_D)
             # exit()
             y = torch.ones(true_dim, 1).to(self.device) * (1.0 / true_dim)
+
                              # 1.0 / true_dim).
             # print("I")
             # print(I)
@@ -309,6 +370,7 @@ class ExtSummarizer(nn.Module):
             # print(D_)
             # print("y")
             # print(y)
+
             Final_score = torch.mm((1 - self.lamb) * torch.inverse(I - self.lamb * torch.mm(tmp_q, D_)), y).transpose(0,1)
             len_ = D.size(0) - true_dim
             tmp_zeros = torch.zeros(1, len_).to(self.device)
@@ -472,7 +534,7 @@ class ExtSummarizer(nn.Module):
 
         # sent_scores = self.ext_layer(sents_vec, mask_cls).squeeze(-1)
 
-        sent_scores = self.cal_matrix(sents_vec, mask_cls)
+        sent_scores = self.cal_matrix0(sents_vec, mask_cls)
         # print("sent_scores: ",sent_scores.size())
         # print(sent_scores)
         # exit()
