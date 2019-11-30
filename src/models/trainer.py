@@ -229,7 +229,12 @@ class Trainer(object):
 
             if self.args.task == 'hybrid':
                 outputs, scores, copy_params = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls)
+                # print("outputs", outputs.size())
+                # print("scores", scores.size())
+                # print("ext_outputs", copy_params[0].size())
+
                 batch_stats = self.loss.sharded_compute_loss(batch, outputs, self.args.generator_shard_size, normalization, copy_params)
+
             else:
                 outputs, scores = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls)
                 batch_stats = self.loss.sharded_compute_loss(batch, outputs, self.args.generator_shard_size, normalization)

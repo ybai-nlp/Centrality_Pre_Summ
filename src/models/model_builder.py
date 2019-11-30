@@ -188,12 +188,6 @@ class ExtSummarizer(nn.Module):
 
         self.b_matrix = nn.Parameter(torch.Tensor(1, 1))
 
-        nn.init.xavier_normal_(self.W_cont)
-        nn.init.xavier_normal_(self.W_sim)
-        nn.init.xavier_normal_(self.W_rel)
-        nn.init.xavier_normal_(self.W_doc)
-        nn.init.xavier_normal_(self.W_novel)
-        nn.init.xavier_normal_(self.b_matrix)
 
         if checkpoint is not None:
             self.load_state_dict(checkpoint['model'], strict=True)
@@ -205,6 +199,13 @@ class ExtSummarizer(nn.Module):
                 for p in self.ext_layer.parameters():
                     if p.dim() > 1:
                         xavier_uniform_(p)
+
+            nn.init.xavier_uniform_(self.W_cont)
+            nn.init.xavier_uniform_(self.W_sim)
+            nn.init.xavier_uniform_(self.W_rel)
+            nn.init.xavier_uniform_(self.W_doc)
+            nn.init.xavier_uniform_(self.W_novel)
+            nn.init.xavier_uniform_(self.b_matrix)
         self.to(device)
 
 
@@ -573,11 +574,15 @@ class HybridSummarizer(nn.Module):
         self.device = device
 
 
+        # 这两个元件会自己初始化元素
         self.extractor = ExtSummarizer(args, device, checkpoint_ext)
         # self.abstractor = PGTransformers(modules, consts, options)
         self.abstractor = AbsSummarizer(args, device, checkpoint_abs)
 
         self.context_attn = MultiHeadedAttention(head_count = self.args.dec_heads, model_dim =self.args.dec_hidden_size, dropout=self.args.dec_dropout, need_distribution = True)
+
+        # print(self.context_attn.modules())
+        # exit()
 
         # self.bert = Bert(args.large, args.temp_dir, args.finetune_bert)
 
@@ -585,18 +590,30 @@ class HybridSummarizer(nn.Module):
         self.bv = nn.Parameter(torch.Tensor(1))
 
 
-        # bert
-        # if checkpoint is not None:
-        #     self.load_state_dict(checkpoint['model'], strict=True)
-        # else:
-        #     if args.param_init != 0.0:
-        #         for p in self.ext_layer.parameters():
-        #             p.data.uniform_(-args.param_init, args.param_init)
-        #     if args.param_init_glorot:
-        #         for p in self.ext_layer.parameters():
-        #             if p.dim() > 1:
-        #                 xavier_uniform_(p)
+        # bert 测试的时候直接全部load
+        if checkpoint is not None:
+            self.load_state_dict(checkpoint['model'], strict=True)
+        else:
+            # if args.param_init != 0.0:
+            #     for p in self.extractor.parameters():
+            #         p.data.uniform_(-args.param_init, args.param_init)
+            # if args.param_init_glorot:
+            #     for p in self.ext_layer.parameters():
+            #         if p.dim() > 1:
+            #             xavier_uniform_(p)
 
+            nn.init.xavier_uniform_(self.v)
+            nn.init.constant_(self.bv, 0)
+
+            for module in self.context_attn.modules():
+                # print(each)
+                if isinstance(module, (nn.Linear, nn.Embedding)):
+                    module.weight.data.normal_(mean=0.0, std=0.02)
+                elif isinstance(module, nn.LayerNorm):
+                    module.bias.data.zero_()
+                    module.weight.data.fill_(1.0)
+                if isinstance(module, nn.Linear) and module.bias is not None:
+                    module.bias.data.zero_()
         self.to(device)
 
 
@@ -644,8 +661,42 @@ class HybridSummarizer(nn.Module):
         # # print(context_vector)
         # print("decoder_outputs ", decoder_outputs.size())
         # # print(decoder_outputs)
-        # print("y_embed", y_emb.size())
-        # print("self.v ", self.v.size())
+        # 2 * 50 * 768
+
+        # print("y_embed ", y_emb.size())
+        # print("sent_vec ", sent_vec.size())
+        # print("ext_scores", ext_scores.size())
+        # print(ext_scores)
+        sorted_scores, sorted_scores_idx = torch.sort(ext_scores, dim=1, descending=True)
+        # print("sort example idx", sorted_scores_idx.size())
+        # print(sorted_scores_idx)
+        # print("sort example", sorted_scores.size())
+        # print(sorted_scores)
+        # print("sent_vec ", sent_vec.size())
+        # print(sent_vec)
+        select_num = min(3, sent_vec.size(1))
+        selected_vec = torch.zeros(sent_vec.size(0), select_num ,sent_vec.size(2)).to('cuda')
+        for i, batch in enumerate(selected_vec):
+            selected = sent_vec[i].index_select(dim=0, index=sorted_scores_idx[i][:select_num])
+            # print("selected ", selected.size())
+            # print(selected)
+            # print("ext_scores",ext_scores[i][:select_num].unsqueeze(1).size())
+            # print(ext_scores[i][:select_num].unsqueeze(1))
+            selected_vec[i] += selected * ext_scores[i][:select_num].unsqueeze(1)
+            # print("selected_vec[i] ", selected_vec[i].size())
+            # print(selected_vec[i])
+            # exit()
+
+        # selected_vec = sent_vec.index_select(dim=0, index = sorted_scores_idx[:, :3])
+
+        # print("before selected_vec_sum",selected_vec.sum(dim=1))
+        E_sel = selected_vec.sum(dim=1).repeat(1, decoder_outputs.size(1))
+        E_sel = E_sel.reshape(decoder_outputs.size())
+        # print("selected_vec_sum = ", E_sel.size())
+        # print(E_sel)
+
+        # exit()
+
         # print("self.bv ", self.bv.size())
         # print(tgt[:,:,-1])
         # batch_size * tgt_size * src_size
@@ -658,7 +709,8 @@ class HybridSummarizer(nn.Module):
         # print("222222222")
         # print(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1),self.v, self.bv))
         ext_dist = torch.zeros(attn_dist.size(0),attn_dist.size(1), self.abstractor.bert.model.config.vocab_size).to(self.device)
-        g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv))
+        g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, E_sel, context_vector], -1), self.v, self.bv))
+        # g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv))
 
 
         # src: 1 * x_len -> batch * y_len * x_len

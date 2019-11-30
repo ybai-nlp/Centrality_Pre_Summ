@@ -309,7 +309,12 @@ def train_abs_single(args, device_id):
     torch.backends.cudnn.deterministic = True
 
     def train_iter_fct():
-        return data_loader.Dataloader(args, load_dataset(args, 'train', shuffle=True), args.batch_size, device,
+        if args.is_debugging:
+            # print("YES it is debugging")
+            return data_loader.Dataloader(args, load_dataset(args, 'test', shuffle=False), args.batch_size, device,
+                                      shuffle=False, is_test=False)
+        else:
+            return data_loader.Dataloader(args, load_dataset(args, 'train', shuffle=True), args.batch_size, device,
                                       shuffle=True, is_test=False)
 
     model = AbsSummarizer(args, device, checkpoint, bert_from_extractive)

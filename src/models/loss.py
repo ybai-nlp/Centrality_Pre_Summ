@@ -305,7 +305,7 @@ class NMTLossCompute(LossComputeBase):
             # print("scores softmax: ", scores.size())
             scores = scores + new_scores.view(scores.size(0), scores.size(1))
             scores = torch.log(scores)
-        # print("scores logsoftmax: ", scores)
+        # print("scores logsoftmax: ", scores.size())
         # exit()
 
 

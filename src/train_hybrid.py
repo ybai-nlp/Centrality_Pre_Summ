@@ -253,6 +253,21 @@ def train_single_hybrid(args, device_id):
     else:
         checkpoint = None
 
+
+    if args.train_from_extractor != '':
+        logger.info('Loading checkpoint from %s' % args.train_from_extractor)
+        checkpoint_ext = torch.load(args.train_from_extractor,
+                                map_location=lambda storage, loc: storage)
+        opt = vars(checkpoint['opt'])
+        for k in opt.keys():
+            if (k in model_flags):
+                # 给attr加属性
+                setattr(args, k, opt[k])
+    else:
+        checkpoint_ext = None
+
+
+
     def train_iter_fct():
         # 读一次数据
         if args.is_debugging:
@@ -265,10 +280,10 @@ def train_single_hybrid(args, device_id):
             return data_loader.Dataloader(args, load_dataset(args, 'train', shuffle=True), args.batch_size, device,
                                       shuffle=True, is_test=False)
 
-    modules, consts, options = init_modules()
+    # modules, consts, options = init_modules()
     # 选择模型: ExtSummarizer
     # print("1~~~~~~~~~~~~~~~~~~~~")
-    model = HybridSummarizer(args, device,  checkpoint)
+    model = HybridSummarizer(args, device,  checkpoint, checkpoint_ext=checkpoint_ext)
     # 建优化器
     # print("2~~~~~~~~~~~~~~~~~~~~")
     # optim = model_builder.build_optim(args, model, checkpoint)
