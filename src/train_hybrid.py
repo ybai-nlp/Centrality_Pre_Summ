@@ -168,7 +168,7 @@ def validate(args, device_id, pt, step):
             setattr(args, k, opt[k])
     print(args)
 
-    model = ExtSummarizer(args, device, checkpoint)
+    model = HybridSummarizer(args, device, checkpoint)
     model.eval()
 
     valid_iter = data_loader.Dataloader(args, load_dataset(args, 'valid', shuffle=False),
@@ -202,7 +202,7 @@ def test_hybrid(args, device_id, pt, step):
             setattr(args, k, opt[k])
     print(args)
 
-    model = ExtSummarizer(args, device, checkpoint)
+    model = HybridSummarizer(args, device, checkpoint)
     model.eval()
 
     test_iter = data_loader.Dataloader(args, load_dataset(args, 'test', shuffle=False),

@@ -15,7 +15,7 @@ def build_optim(args, model, checkpoint):
     """ Build optimizer """
 
     if checkpoint is not None:
-        optim = checkpoint['optim'][0]
+        optim = checkpoint['optims'][0]
         saved_optimizer_state_dict = optim.optimizer.state_dict()
         optim.optimizer.load_state_dict(saved_optimizer_state_dict)
         if args.visible_gpus != '-1':
@@ -217,6 +217,8 @@ class ExtSummarizer(nn.Module):
         # print(mask_cls)
         mask_my_own = torch.bmm(mask_cls.transpose(1,2), mask_cls)
         sent_num = mask_cls.sum(dim=2).squeeze(1)
+        # print("sent_num = ")
+        # print(sent_num)
         d_rep = sent_vec.mean(dim=1).unsqueeze(1).transpose(1,2)
         score_gather = torch.zeros(1, sent_vec.size(1)).to(self.device)
         for i in range(sent_vec.size(0)): #对于每一个batch
@@ -355,23 +357,37 @@ class ExtSummarizer(nn.Module):
             # print("true_dim = ", int(true_dim))
             tmp_D = D[:true_dim, :true_dim]
             tmp_q = q[:true_dim, :true_dim]
-            # print("tmp D = ", tmp_D)
-            D_ = torch.inverse(tmp_D)
-            I = torch.eye(true_dim).to(self.device)
-            # exit()
-            y = torch.ones(true_dim, 1).to(self.device) * (1.0 / true_dim)
+            if true_dim > 1:
+                # print("tmp D = ", tmp_D)
+                D_ = torch.inverse(tmp_D)
+                I = torch.eye(true_dim).to(self.device)
+                # exit()
+                y = torch.ones(true_dim, 1).to(self.device) * (1.0 / true_dim)
+                Final_score = torch.mm((1 - self.lamb) * torch.inverse(I - self.lamb * torch.mm(tmp_q, D_)), y).transpose(0,1)
+                # print("final_score", Final_score.size())
+            else:
+                Final_score = torch.ones(1, 1)
+                # print(tmp_D.det())
+                # print("tmp_D ", tmp_D.size())
+                # print(tmp_D)
+                # print("tmp_q ", tmp_q.size())
+                # print(tmp_q)
+                # print("sadfdasfdsafdsa")
+                # D_ = torch.inverse(tmp_D)
+                # print(D_)
+                # continue
 
-                             # 1.0 / true_dim).
-            # print("I")
-            # print(I)
-            # print("q")
-            # print(q)
-            # print("D_")
-            # print(D_)
-            # print("y")
-            # print(y)
 
-            Final_score = torch.mm((1 - self.lamb) * torch.inverse(I - self.lamb * torch.mm(tmp_q, D_)), y).transpose(0,1)
+                                 # 1.0 / true_dim).
+                # print("I")
+                # print(I)
+                # print("q")
+                # print(q)
+                # print("D_")
+                # print(D_)
+                # print("y")
+                # print(y)
+
             len_ = D.size(0) - true_dim
             tmp_zeros = torch.zeros(1, len_).to(self.device)
             Final_score = torch.cat((Final_score, tmp_zeros), dim=1)
@@ -859,6 +875,13 @@ class HybridSummarizer(nn.Module):
         # print(attn_dist)
         attn_dist = attn_dist * attn_pad_mask
         ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * attn_dist)
+
+        # c = torch.zeros(attn_dist.size())
+        # for i, each_batch in enumerate(c):
+        #     for j, each_word in enumerate(each_batch):
+
+
+
         # print("ext_vocab_prob")
         # print(ext_vocab_prob.size())
         # exit()
