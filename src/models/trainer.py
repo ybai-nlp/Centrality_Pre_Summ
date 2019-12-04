@@ -249,7 +249,11 @@ class Trainer(object):
             mask_cls = batch.mask_cls
 
             if self.args.task == 'hybrid':
-                outputs, scores, copy_params = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls)
+                if self.args.oracle:
+                    labels = batch.src_sent_labels
+                    outputs, scores, copy_params = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls, labels)
+                else:
+                    outputs, scores, copy_params = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls)
                 # print("outputs", outputs.size())
                 # print("scores", scores.size())
                 # print("ext_outputs", copy_params[0].size())

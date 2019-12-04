@@ -803,7 +803,7 @@ class HybridSummarizer(nn.Module):
         self.to(device)
 
 
-    def forward(self, src, tgt, segs, clss, mask_src, mask_tgt, mask_cls):
+    def forward(self, src, tgt, segs, clss, mask_src, mask_tgt, mask_cls, labels = None):
 
 
         # print("src = ", src.size())
@@ -821,7 +821,16 @@ class HybridSummarizer(nn.Module):
         # print("mask_cls = ", mask_cls.size())
         # print(mask_cls)
 
-        ext_scores, mask_cls, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
+        if labels is not None:
+            _, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
+            # print("labels", labels.size())
+            # print(labels)
+            ext_scores = (labels.float() + 0.1) / 1.15
+            # print("ext_scores, ", ext_scores.size())
+            # print(ext_scores)
+        else:
+            ext_scores, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
+            # print(ext_scores)
         # exit()
 
         # batchsize * (tgt_len - 1) * hidden_size

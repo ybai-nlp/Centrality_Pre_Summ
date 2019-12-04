@@ -118,6 +118,10 @@ if __name__ == '__main__':
         '--pairwise',
         action='store_true',
         help='use ext pairwise loss')
+    parser.add_argument(
+        '--oracle',
+        action='store_true',
+        help='use hybrid oracle to train hybrid model')
     # parser.add_argument(
     #     '--threshold_control',
     #     action='store_true',
