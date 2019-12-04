@@ -114,6 +114,10 @@ if __name__ == '__main__':
         '--is_debugging',
         action='store_true',
         help='turn the model into debug model')
+    parser.add_argument(
+        '--pairwise',
+        action='store_true',
+        help='use ext pairwise loss')
     # parser.add_argument(
     #     '--threshold_control',
     #     action='store_true',

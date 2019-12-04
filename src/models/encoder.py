@@ -96,8 +96,22 @@ class ExtTransformerEncoder(nn.Module):
             x = self.transformer_inter[i](i, x, x, 1 - mask)  # all_sents * max_tokens * dim
 
         x = self.layer_norm(x)
-        sent_scores = self.sigmoid(self.wo(x))
-        sent_scores = sent_scores.squeeze(-1) * mask.float()
+        # print("x = ", x.size())
+        # print(x)
+        # print("x mask", mask.unsqueeze(1).transpose(1,2).size())
+        # print(mask.unsqueeze(1).transpose(1,2))
+        # exit()
 
-        return sent_scores
+        # sent_scores = self.sigmoid(self.wo(x))
+        # sent_scores = sent_scores.squeeze(-1) * mask.float()
+
+
+
+        # sent_vec = x.mul(mask.unsqueeze(1).transpose(1,2).float())
+        sent_vec = x * (mask.unsqueeze(1).transpose(1,2).float())
+        # print(sent_vec)
+        # exit()
+
+        return sent_vec
+        # return sent_scores
 

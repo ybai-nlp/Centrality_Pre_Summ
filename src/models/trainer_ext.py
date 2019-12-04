@@ -102,8 +102,10 @@ class Trainer(object):
         self.gpu_rank = gpu_rank
         self.report_manager = report_manager
 
-        # self.loss = torch.nn.BCELoss(reduction='none')
-        self.loss = PairwiseLoss()
+        if args.pairwise:
+            self.loss = PairwiseLoss()
+        else:
+            self.loss = torch.nn.BCELoss(reduction='none')
         assert grad_accum_count > 0
         # Set model in training mode.
         if (model):
@@ -205,8 +207,13 @@ class Trainer(object):
 
                 sent_scores, mask = self.model(src, segs, clss, mask, mask_cls)
 
-                loss = self.loss(sent_scores, labels.float())
-                loss = (loss * mask.float()).sum()
+
+                if self.args.pairwise:
+                    loss = self.loss(sent_scores, labels.float(), mask)
+                    loss = loss.sum()
+                else:
+                    loss = self.loss(sent_scores, labels.float())
+                    loss = (loss * mask.float()).sum()
                 batch_stats = Statistics(float(loss.cpu().data.numpy()), len(labels))
                 stats.update(batch_stats)
             self._report_step(0, step, valid_stats=stats)
@@ -264,8 +271,12 @@ class Trainer(object):
                         else:
                             sent_scores, mask = self.model(src, segs, clss, mask, mask_cls)
 
-                            loss = self.loss(sent_scores, labels.float())
-                            loss = (loss * mask.float()).sum()
+                            if self.args.pairwise:
+                                loss = self.loss(sent_scores, labels.float(), mask)
+                                loss = loss.sum()
+                            else:
+                                loss = self.loss(sent_scores, labels.float())
+                                loss = (loss * mask.float()).sum()
                             batch_stats = Statistics(float(loss.cpu().data.numpy()), len(labels))
                             stats.update(batch_stats)
 
@@ -326,12 +337,34 @@ class Trainer(object):
 
             sent_scores, mask = self.model(src, segs, clss, mask, mask_cls)
 
-            loss = self.loss(sent_scores, labels.float())
-
-            # loss = (loss * mask.float()).sum()
-            loss = loss.sum()
+            # print("sent_scores ", sent_scores.size())
+            # print(sent_scores)
+            # print("labels ", labels.size())
+            # print(labels)
+            if self.args.pairwise:
+                loss = self.loss(sent_scores, labels.float(), mask)
+                loss = loss.sum()
+            else:
+                loss = self.loss(sent_scores, labels.float())
+                loss = (loss * mask.float()).sum()
             # 做了个平均 numel返回number of elements
             (loss / loss.numel()).backward()
+
+
+            # print("parameters: ")
+            # paramss = list(self.model.named_parameters())
+            # for each in paramss:
+            #     try:
+            #         if each[1].grad == None:
+            #             print("fuck ", each[0])
+            #     except:
+            #         continue
+            # exit()
+                    # print("出现问题了， each[1] = ", each[1].grad)
+            # for each in self.model.parameters():
+            #     # if each.requires_grad == False:
+            #     if each.grad == None:
+            #         print(each.grad)
             # print("loss", loss.size())
             # print(loss)
             # print("mask", mask.size())

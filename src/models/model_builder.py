@@ -176,21 +176,25 @@ class ExtSummarizer(nn.Module):
             my_pos_embeddings.weight.data[512:] = self.bert.model.embeddings.position_embeddings.weight.data[-1][None,:].repeat(args.max_pos-512,1)
             self.bert.model.embeddings.position_embeddings = my_pos_embeddings
 
-
+        # self.Cont_transform = nn.Linear(self.bert.model.config.hidden_size, 1)
+        # self.Sim_transform = nn.Bilinear(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size, 1)
 
 
         self.W_cont = nn.Parameter(torch.Tensor(1 ,self.bert.model.config.hidden_size))
         self.W_sim = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
         # 重要度的内容可以
         self.W_rel = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
-        self.W_doc = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
+        # self.W_doc = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
         self.W_novel = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
 
         self.b_matrix = nn.Parameter(torch.Tensor(1, 1))
 
+        self.q_transform = nn.Linear(100, 1)
+
 
         if checkpoint is not None:
             self.load_state_dict(checkpoint['model'], strict=True)
+            print("checkpoint loaded! ")
         else:
             if args.param_init != 0.0:
                 for p in self.ext_layer.parameters():
@@ -199,13 +203,24 @@ class ExtSummarizer(nn.Module):
                 for p in self.ext_layer.parameters():
                     if p.dim() > 1:
                         xavier_uniform_(p)
+                # for p in self.Cont_transform.parameters():
+                #     if p.dim() > 1:
+                #         xavier_uniform_(p)
+                # for p in self.Sim_transform.parameters():
+                #     if p.dim() > 1:
+                #         xavier_uniform_(p)
+                for p in self.q_transform.parameters():
+                    if p.dim() > 1:
+                        xavier_uniform_(p)
+
 
             nn.init.xavier_uniform_(self.W_cont)
             nn.init.xavier_uniform_(self.W_sim)
             nn.init.xavier_uniform_(self.W_rel)
-            nn.init.xavier_uniform_(self.W_doc)
+            # nn.init.xavier_uniform_(self.W_doc)
             nn.init.xavier_uniform_(self.W_novel)
             nn.init.xavier_uniform_(self.b_matrix)
+            # nn.init.xavier_uniform_(self.q_transform)
         self.to(device)
 
 
@@ -226,14 +241,31 @@ class ExtSummarizer(nn.Module):
             # exit()
             # 这里需要纵向的向量，横向向量最后加和的时候有问题，和novelty不一致
             Score_Cont = torch.mm(self.W_cont, sent_vec[i].transpose(0, 1)).transpose(0,1) * mask_cls[i].transpose(0,1)
+
+            score_cont = self.Cont_transform(sent_vec[i])
+            # print("Score_Cont ", Score_Cont.size())
+            # print(Score_Cont)
+            #
+            # print("Linear ", score_cont.size())
+            # print(score_cont)
+
             tmp_Sim = torch.mm(sent_vec[i], self.W_sim)
             Score_Sim = torch.mm(tmp_Sim, sent_vec[i].transpose(0, 1)) * mask_my_own[i]
+            score_sim = self.Sim_transform(sent_vec[i], sent_vec[i])
+            print("score_sim ", Score_Sim.size())
+            print(Score_Sim)
+            print("bilinear ", score_sim.size())
+            print(score_sim)
+            exit()
+
+
+
+
+
             tmp_rel = torch.mm(sent_vec[i], self.W_rel)
             Score_rel = torch.mm(tmp_rel, d_rep[i]).transpose(0, 1).transpose(0,1) * mask_cls[i].transpose(0,1)
             # Score_Sim = torch.mm(tmp_Sim, sent_vec.transpose(1, 2)) * mask_my_own[i]
-            # print("score_cont ", Score_Cont.size())
-            # print(Score_Cont)
-            #
+
             # print("score_sim ", Score_Sim.size())
             # print(Score_Sim)
             # print("score_rel ", Score_rel.size())
@@ -249,7 +281,15 @@ class ExtSummarizer(nn.Module):
 
             q = Score_rel + Score_Cont + Score_Sim + self.b_matrix
             q = q * mask_my_own[i]
-            # print("q before ", q.size())
+
+            padding_zeros = torch.zeros(q.size(0), 50 - q.size(1)).to('cuda')
+            q = torch.cat((q, padding_zeros), dim=1)
+            print("q", q.size())
+            print(q)
+            q = self.q_transform(q)
+            score_gather = q[:mask_cls.size(1)]
+            exit()
+            # print("q ", q.size())
             # print(q)
 
 
@@ -265,6 +305,8 @@ class ExtSummarizer(nn.Module):
             # print("第二项")
             # print(((q[0].sum() / sent_num[i]) * sent_vec[i][0]).size())
             # accumulation = torch.mm(tmp_nov, nn.functional.tanh(((q[0].sum() / sent_num[i]) * sent_vec[i][0]).unsqueeze(0).transpose(0,1)))
+
+            '''
 
             # ! 重要：这里要过sigmoid做mask
             Score_Nov = torch.zeros(1,1).to('cuda')
@@ -290,10 +332,20 @@ class ExtSummarizer(nn.Module):
                 # print(q[j])
                 accumulation += (q[j].sum() / sent_num[i]) * sent_vec[i][j]
                 # print("accumalation1: ",accumulation)
+                
+                
+                
+                
+            Score_Nov = Score_Nov.transpose(0, 1)
+            '''
 
 
             q = nn.functional.sigmoid(q) * mask_my_own[i]
-            Score_Nov = Score_Nov.transpose(0, 1)
+
+            # 这里要把维度加到50，然后乘矩阵，然后再把维度裁剪回来。
+
+
+
 
             if self.args.control != 'None':
                 # print("using threshold_control")
@@ -359,7 +411,17 @@ class ExtSummarizer(nn.Module):
             tmp_q = q[:true_dim, :true_dim]
             if true_dim > 1:
                 # print("tmp D = ", tmp_D)
-                D_ = torch.inverse(tmp_D)
+                try:
+                    D_ = torch.inverse(tmp_D)
+                except:
+                    print("tmp D ", tmp_D.size())
+                    print(tmp_D)
+                    print("true_dim = ", true_dim)
+                    print("q ", q.size())
+                    print(q)
+                    print("i = ", i)
+                    print("mask_cls ", mask_cls)
+                    exit()
                 I = torch.eye(true_dim).to(self.device)
                 # exit()
                 y = torch.ones(true_dim, 1).to(self.device) * (1.0 / true_dim)
@@ -390,10 +452,21 @@ class ExtSummarizer(nn.Module):
 
             len_ = D.size(0) - true_dim
             tmp_zeros = torch.zeros(1, len_).to(self.device)
-            Final_score = torch.cat((Final_score, tmp_zeros), dim=1)
+            Final_score = torch.sigmoid(torch.cat((Final_score, tmp_zeros), dim=1) * sent_num[i]) * mask_cls[i]
+            # print("sent_num[i]", sent_num[i])
+            # print(Final_score.size())
+
+
+
+            # Final_score = torch.cat((Final_score, tmp_zeros), dim=1)
+
+
+
+            # print("finalScore", Final_score)
 
             # print("Final_score", Final_score.size())
             # print(Final_score)
+
             # exit()
             if i == 0:
                 score_gather += Final_score
@@ -406,8 +479,8 @@ class ExtSummarizer(nn.Module):
 
         # [batch_size, 1, hidden_size] * [batch_size, hidden_size, sent_num] = [batch_size, 1, sent_num]
         # Score_Cont = torch.bmm(torch.cat([self.W_cont] * sent_vec.size()[0]), sent_vec.transpose(1,2))
-        W_cont0 = self.W_cont.expand(sent_vec.size()[0], self.W_cont.size()[0], self.W_cont.size()[1])
-        # W_cont0 = self.W_cont
+        # W_cont0 = self.W_cont.expand(sent_vec.size()[0], self.W_cont.size()[0], self.W_cont.size()[1])
+        W_cont0 = self.W_cont.unsqueeze(0)
         # print("W_cont0: ", W_cont0.size())
         # print(W_cont0)
         # print("sent_vec.transpose: ", sent_vec.transpose(1,2).size())
@@ -417,18 +490,24 @@ class ExtSummarizer(nn.Module):
         # print("mask_my_ own", mask_my_own.size())
         # print(mask_my_own)
 
-        Score_Cont = torch.bmm(W_cont0, sent_vec.transpose(1,2))
+        Score_Cont = torch.matmul(W_cont0, sent_vec.transpose(1,2))
         # exit()
         # print("Score_Cont = ")
         # print(Score_Cont)
-        Score_Cont = Score_Cont.expand(Score_Cont.size()[0], sent_vec.size()[1], sent_vec.size()[1]).transpose(1,2)
+        # exit()
+        # Score_Cont = Score_Cont.expand(Score_Cont.size(0), sent_vec.size(1), sent_vec.size(1)).transpose(1,2)
+
+        # Score_Cont = Score_Cont.clone(Score_Cont.size(0), sent_vec.size(1), sent_vec.size(1)).transpose(1,2)
+        #
         # print("Score_Cont = ", Score_Cont.size())
         # print(Score_Cont)
+        # exit()
 
         # [batch_size, sent_num, hidden_size] * [batch_size * hidden_size * hidden_size] = [batch_size, sent_num, hidden_size]
-        W_sim0 = self.W_sim.expand(sent_vec.size()[0], self.W_sim.size()[0], self.W_sim.size()[1])
+        # W_sim0 = self.W_sim.expand(sent_vec.size(0), self.W_sim.size(0), self.W_sim.size(0))
+        W_sim0 = self.W_sim.unsqueeze(0)
         # tmp_Sim = torch.bmm(sent_vec, torch.cat([self.W_sim] * sent_vec.size()[0]))
-        tmp_Sim = torch.bmm(sent_vec, W_sim0)
+        tmp_Sim = torch.matmul(sent_vec, W_sim0)
         # [batch_size, sent_num, hidden_size] * [batch_size, hidden_size, sent_num] = [batch_size, sent_num, sent_num]
         Score_Sim = torch.bmm(tmp_Sim, sent_vec.transpose(1,2)) * mask_my_own
 
@@ -439,23 +518,40 @@ class ExtSummarizer(nn.Module):
         d_rep = sent_vec.mean(dim=1).unsqueeze(1).transpose(1,2)
 
 
-        W_rel0 = self.W_rel.expand(sent_vec.size()[0], self.W_rel.size()[0], self.W_rel.size()[1])
+        # W_rel0 = self.W_rel.expand(sent_vec.size()[0], self.W_rel.size()[0], self.W_rel.size()[1])
+        W_rel0 = self.W_rel.unsqueeze(0)
         # [batch_size, sent_num, hidden_size] * [batch_size, hidden_size, hidden_size] = [batch_size, sent_num, hidden_size]
-        tmp_rel = torch.bmm(sent_vec, W_rel0)
+        tmp_rel = torch.matmul(sent_vec, W_rel0)
         # [batch_size, sent_num, hidden_size] * [batch_size, hidden_size, 1] = [batch_size, 1, sent_num]
         Score_rel = torch.bmm(tmp_rel, d_rep).transpose(1,2)
-        Score_rel = Score_rel.expand(Score_rel.size()[0], sent_vec.size()[1], sent_vec.size()[1]).transpose(1,2) * mask_my_own
+        # Score_rel = Score_rel.expand(Score_rel.size()[0], sent_vec.size()[1], sent_vec.size()[1]).transpose(1,2) * mask_my_own
         # print("Score_rel = ", Score_rel.size())
         # print(Score_rel)
         # print("BBB = ", (self.b_matrix.expand(Score_Sim.size()[0],Score_Sim.size()[1], Score_Sim.size()[2]) * mask_my_own).size())
         # print(self.b_matrix.expand(Score_Sim.size()[0],Score_Sim.size()[1], Score_Sim.size()[2]) * mask_my_own)
 
 
-        q = Score_rel + Score_Cont + Score_Sim + self.b_matrix.expand(Score_Sim.size()[0],Score_Sim.size()[1], Score_Sim.size()[2])
+        q = Score_rel.transpose(1,2) + Score_Cont.transpose(1,2) + Score_Sim + self.b_matrix
         # print("Final_score = ", Final_score.size())
         # print(Final_score)
         # [batch * sent_num * sent_num]
         q = torch.sigmoid(q) * mask_my_own
+        padding_zeros = torch.zeros(q.size(0), q.size(1), 100 - q.size(2)).to('cuda')
+        q = torch.cat((q, padding_zeros), dim=2)
+        # print("q", q.size())
+        # print(q)
+        q = self.q_transform(q)
+        # print("q", q.squeeze(2).size())
+        # print(q.squeeze(2))
+        # print("mask")
+        # print(mask_cls)
+        score_gather = torch.sigmoid(q.squeeze(2) * mask_cls.squeeze(1))
+        # print("score ", score_gather.size())
+        # print(score_gather)
+        # exit()
+
+
+        '''
         # print("q = ", q.size())
         # print(q)
         # print("Final_score = ", Final_score.size())
@@ -471,6 +567,7 @@ class ExtSummarizer(nn.Module):
         # print("sum of mask cls = ", mask_cls.size())
         # print(mask_cls)
         # print(mask_cls.sum(dim=2))
+        
         sent_num = mask_cls.sum(dim=2).squeeze(1)
 
         # print(sent_num)
@@ -484,6 +581,12 @@ class ExtSummarizer(nn.Module):
             # tmp_D = D[i].narrow(0,0,true_dim).narraw(1,0,true_dim)
             # q = q[i].narrow(0, 0, true_dim).narraw(1,0,true_dim)
             D_ = torch.inverse(tmp_D)
+            # except:
+            #     print("tmp_D = ", tmp_D.size())
+            #     print(tmp_D)
+            #     print("q = ", q.size())
+            #     print(q)
+            #     exit()
             I = torch.eye(true_dim).to(self.device)
             # print(tmp_D)
             # exit()
@@ -497,9 +600,10 @@ class ExtSummarizer(nn.Module):
             # print("y")
             # print(y)
             Final_score = torch.mm((1 - self.lamb) * torch.inverse(I - self.lamb * torch.mm(tmp_q, D_)), y).transpose(0,1)
+            Final_score = torch.sigmoid(Final_score)
             len_ = Score_Sim.size()[2] - true_dim
             tmp_zeros = torch.zeros(1, len_).to(self.device)
-            Final_score = torch.cat((Final_score, tmp_zeros), dim=1)
+            Final_score = torch.cat((Final_score, tmp_zeros), dim=1) * true_dim
             if i == 0:
                 score_gather += Final_score
             else:
@@ -526,6 +630,7 @@ class ExtSummarizer(nn.Module):
         # print("score gather = ", score_gather.size())
         # print(score_gather)
         # batch_size * sent_num * sent_num
+        '''
         return score_gather
 
 
@@ -538,9 +643,7 @@ class ExtSummarizer(nn.Module):
         # print(top_vec)
         # 得到sentence vector
         sents_vec = top_vec[torch.arange(top_vec.size(0)).unsqueeze(1), clss]
-        # print("sents vec1 = ", sents_vec.size())
-        # exit()
-        # print(sents_vec)
+
         sents_vec = sents_vec * mask_cls[:, :, None].float()
 
         # batchsize * sentencenum * dim
@@ -548,9 +651,13 @@ class ExtSummarizer(nn.Module):
 
         # sent_scores = self.ext_layer(sents_vec, mask_cls).squeeze(-1)
 
-        # sent_scores = self.ext_layer(sents_vec, mask_cls).squeeze(-1)
+        # print("sents vec before = ", sents_vec.size())
+        # print(sents_vec)
 
-        sent_scores = self.cal_matrix0(sents_vec, mask_cls)
+
+        sents_vec = self.ext_layer(sents_vec, mask_cls).squeeze(-1)
+        sent_scores = self.cal_matrix(sents_vec, mask_cls)
+
         # print("sent_scores: ",sent_scores.size())
         # print(sent_scores)
         # exit()
@@ -671,6 +778,7 @@ class HybridSummarizer(nn.Module):
         # bert 测试的时候直接全部load
         if checkpoint is not None:
             self.load_state_dict(checkpoint['model'], strict=True)
+            print("checkpoint loaded!")
         else:
             # if args.param_init != 0.0:
             #     for p in self.extractor.parameters():
@@ -737,8 +845,7 @@ class HybridSummarizer(nn.Module):
 
         # print("context_vector ", context_vector.size())
         # # print(context_vector)
-        # print("decoder_outputs ", decoder_outputs.size())
-        # # print(decoder_outputs)
+
         # 2 * 50 * 768
 
         # print("y_embed ", y_emb.size())
@@ -787,6 +894,7 @@ class HybridSummarizer(nn.Module):
         # print("222222222")
         # print(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1),self.v, self.bv))
         ext_dist = torch.zeros(attn_dist.size(0),attn_dist.size(1), self.abstractor.bert.model.config.vocab_size).to(self.device)
+
         g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, E_sel, context_vector], -1), self.v, self.bv))
         # g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv))
 
@@ -807,6 +915,7 @@ class HybridSummarizer(nn.Module):
         # print(attn_pad_mask)
         # torch.set_printoptions(profile="default")
 
+        # 这里是把cls等乱七八糟的屏蔽掉
         for i, each_batch in enumerate(clss):
             # print(i)
             for j, each_start in enumerate(each_batch):
@@ -925,8 +1034,10 @@ class HybridSummarizer(nn.Module):
         # clss = clss - 2 * () # 乘一个clss大小的单位矩阵
 
 
-
-
+        #
+        # print("decoder_outputs ", decoder_outputs.size())
+        # print(decoder_outputs)
+        # exit()
 
         '''
         W matrix1: content,不涉及句子之间的关系，可以放在外边的循环里 = c^1_i

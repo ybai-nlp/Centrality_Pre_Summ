@@ -8,6 +8,7 @@ from __future__ import division
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import random
 
 from models.reporter import Statistics
 
@@ -126,11 +127,24 @@ class LossComputeBase(nn.Module):
 
         """
         batch_stats = Statistics()
-        shard_state = self._make_shard_state(batch, output)
+        # print("batch = ")
+        # print(batch)
+        shard_state = self._make_shard_state(batch, output, copy_params)
         for shard in shards(shard_state, shard_size):
-            loss, stats = self._compute_loss(batch, **shard, copy_params=copy_params)
+            # print("shard")
+            # print(shard)
+            output = shard['output']
+            target = shard['target']
+            copy_params = (shard['copy_params[0]'], shard['copy_params[1]'])
+            loss, stats = self._compute_loss(batch, output, target, copy_params)
+            # print("copy_params: ")
+            # print(copy_params[0].size())
+            # print(copy_params[0])
+            # print(copy_params[1].size())
+            # print(copy_params[1])
             # print("111111111111")
-            loss.div(float(normalization)).backward(retain_graph=True)
+            # loss.div(float(normalization)).backward(retain_graph=True)
+            loss.div(float(normalization)).backward()
             batch_stats.update(stats)
 
         return batch_stats
@@ -202,35 +216,62 @@ class PairwiseLoss(nn.Module):
         super(PairwiseLoss, self).__init__()
         self.loss = torch.nn.BCELoss(reduction='none')
 
-    def forward(self, output, target):
+    def forward(self, output, target, mask):
         """
         output (FloatTensor): batch_size x n_classes
         target (LongTensor): batch_size
         """
+
+        # print(mask)
+        # print("target", target)
+        # exit()
+        # for i in range(target.size(0)):
+        #     for j in range(5):
+        #         random_int = random.randint(0, mask[i].sum() - 1)
+        #         # print(mask[i])
+        #         # print(random_int)
+        #         target[i][random_int] = 1
+
+
+
+
+
         # model_prob = self.one_hot.repeat(target.size(0), 1)
         # model_prob.scatter_(1, target.unsqueeze(1), self.confidence)
         # model_prob.masked_fill_((target == self.padding_idx).unsqueeze(1), 0)
         # print("output ", output.size())
         # print(output)
         # print("output repeat", output.repeat(1, output.size(1)).resize(output.size(0), output.size(1), output.size(1)).size())
-        mask = output.eq(0).float()
-        tmp = torch.ones(output.size(0), output.size(1)).to('cuda')
-        mask = (tmp - mask).unsqueeze(1)
+        # mask = output.eq(0).float()
+        mask = mask.unsqueeze(1).float()
+        # print("mask", mask.size())
+        # print(mask)
+        # tmp = torch.ones(output.size(0), output.size(1)).to('cuda')
+        # mask = (tmp - mask).unsqueeze(1)
         # print("mask ", mask.size())
         # print(mask)
         mask = torch.bmm(mask.transpose(1,2), mask)
+        # print("mask", mask.size())
+        # print(mask)
         # print("mask ", mask.size())
         # print(mask)
-        output_ = output.repeat(1, output.size(1)).resize(output.size(0), output.size(1), output.size(1))
+        output_ = output.repeat(1, output.size(1)).reshape(output.size(0), output.size(1), output.size(1))
+        # print("output_ ", output_.size())
+        # print(output_)
         # print(output_)
         outputt = output.unsqueeze(1).transpose(1,2)
         outputt = outputt.repeat(1,1,outputt.size(1))
-        pairwise_output = nn.functional.sigmoid(outputt - output_) * mask
+        # print("outputt ", outputt.size())
+        # print(outputt)
+
+
+        # exit()
+        pairwise_output = nn.functional.sigmoid((outputt - output_) * 5) * mask
         # print("pairwise_output", pairwise_output.size())
         # print(pairwise_output)
         # print("outputt ", outputt.size())
         # print(outputt)
-
+        #
         # print("target")
         # print(target)
         target1 = torch.zeros(pairwise_output.size()).to('cuda')
@@ -246,6 +287,7 @@ class PairwiseLoss(nn.Module):
         target1 = target1 * mask
         # print("target", target1.size())
         # print(target1)
+
 
         loss = self.loss(pairwise_output, target1) * mask
         # print("loss", loss.size())
@@ -275,10 +317,12 @@ class NMTLossCompute(LossComputeBase):
                 ignore_index=self.padding_idx, reduction='sum'
             )
 
-    def _make_shard_state(self, batch, output):
+    def _make_shard_state(self, batch, output, copy_params):
         return {
             "output": output,
             "target": batch.tgt[:,1:],
+            "copy_params[0]": copy_params[0],
+            "copy_params[1]": copy_params[1],
         }
 
     def _compute_loss(self, batch, output, target, copy_params = None):
@@ -305,13 +349,19 @@ class NMTLossCompute(LossComputeBase):
             # print("scores softmax: ", scores.size())
             scores = scores + new_scores.view(scores.size(0), scores.size(1))
             scores = torch.log(scores)
-        # print("scores logsoftmax: ", scores.size())
-        # exit()
 
 
         gtruth =target.contiguous().view(-1)
+        # print("scores logsoftmax: ", scores.size())
+        # print("gtruth ", gtruth.size())
+        # print(gtruth)
+        # exit()
+
+
 
         loss = self.criterion(scores, gtruth)
+        # print('loss', loss.size())
+        # print(loss)
 
         stats = self._stats(loss.clone(), scores, gtruth)
 
