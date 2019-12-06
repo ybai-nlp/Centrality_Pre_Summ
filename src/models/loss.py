@@ -214,7 +214,8 @@ class PairwiseLoss(nn.Module):
     """
     def __init__(self):
         super(PairwiseLoss, self).__init__()
-        self.loss = torch.nn.BCELoss(reduction='none')
+        # self.loss = torch.nn.BCELoss(reduction='none')
+        self.loss = torch.nn.MSELoss(reduction='none')
 
     def forward(self, output, target, mask):
         """
@@ -266,30 +267,42 @@ class PairwiseLoss(nn.Module):
 
 
         # exit()
-        pairwise_output = nn.functional.sigmoid((outputt - output_) * 5) * mask
+        pairwise_output = nn.functional.sigmoid((outputt - output_)) * mask
+
+
         # print("pairwise_output", pairwise_output.size())
         # print(pairwise_output)
+        # print("mask", mask.size())
+        # print(mask)
+        # exit()
         # print("outputt ", outputt.size())
         # print(outputt)
         #
         # print("target")
         # print(target)
-        target1 = torch.zeros(pairwise_output.size()).to('cuda')
+
+
+        target1 = torch.zeros(mask.size()).to('cuda')
         for i in range(target1.size(0)):
             for j in range(target1.size(1)):
                 for k in range(target1.size(2)):
                     if target[i][j] > target[i][k]:
                         target1[i][j][k] = 1
                     elif target[i][j] < target[i][k]:
-                        target1[i][j][k] = 0
+                        target1[i][j][k] = -1
                     else:
-                        target1[i][j][k] = 0.5
+                        target1[i][j][k] = 0
         target1 = target1 * mask
         # print("target", target1.size())
         # print(target1)
 
 
         loss = self.loss(pairwise_output, target1) * mask
+
+        # loss = -0.5 * ((1 - target1) * torch.log((1 - pairwise_output).abs_()) + (1 + target1) * torch.log((1 + pairwise_output).abs_()))
+        # print("loss = ", loss)
+
+
         # print("loss", loss.size())
         # print(loss)
         # exit()
@@ -334,7 +347,9 @@ class NMTLossCompute(LossComputeBase):
         # print(bottled_output)
         # exit()
         scores = self.generator(bottled_output)
-
+        # print("scores ", scores.size())
+        # print(scores)
+        # exit()
         # print("scores ext : ", copy_params)
 
 
@@ -343,11 +358,11 @@ class NMTLossCompute(LossComputeBase):
             # print(copy_params[0].size())
             # print("g")
             # print(copy_params[1].size())
-            new_scores = copy_params[1] * copy_params[0]
+            # new_scores = copy_params[1] * copy_params[0]
             # print("new_scores")
             # print(new_scores.size())
             # print("scores softmax: ", scores.size())
-            scores = scores + new_scores.view(scores.size(0), scores.size(1))
+            scores = scores * copy_params[1].view(-1,copy_params[1].size(2)) + copy_params[0].view(-1,copy_params[0].size(2))
             scores = torch.log(scores)
 
 

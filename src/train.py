@@ -122,6 +122,10 @@ if __name__ == '__main__':
         '--oracle',
         action='store_true',
         help='use hybrid oracle to train hybrid model')
+    parser.add_argument(
+        '--self_compare',
+        action='store_true',
+        help='use hybrid oracle to train hybrid model')
     # parser.add_argument(
     #     '--threshold_control',
     #     action='store_true',

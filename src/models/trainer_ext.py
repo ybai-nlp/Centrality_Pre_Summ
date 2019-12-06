@@ -9,7 +9,7 @@ from models.reporter_ext import ReportMgr, Statistics
 from others.logging import logger
 from others.utils import test_rouge, rouge_results_to_str
 from models.loss import PairwiseLoss
-
+from tensorboardX import SummaryWriter
 
 
 def _tally_parameters(model):
@@ -337,12 +337,19 @@ class Trainer(object):
 
             sent_scores, mask = self.model(src, segs, clss, mask, mask_cls)
 
+
+
             # print("sent_scores ", sent_scores.size())
             # print(sent_scores)
             # print("labels ", labels.size())
             # print(labels)
             if self.args.pairwise:
                 loss = self.loss(sent_scores, labels.float(), mask)
+                # print("???")
+                # with SummaryWriter(comment='model') as w:
+                #     w.add_graph(self.loss, (sent_scores, labels.float(), mask, ) )
+                #     print("1???")
+                #     exit()
                 loss = loss.sum()
             else:
                 loss = self.loss(sent_scores, labels.float())

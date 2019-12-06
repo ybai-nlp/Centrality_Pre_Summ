@@ -15,7 +15,7 @@ def build_optim(args, model, checkpoint):
     """ Build optimizer """
 
     if checkpoint is not None:
-        optim = checkpoint['optims'][0]
+        optim = checkpoint['optim']
         saved_optimizer_state_dict = optim.optimizer.state_dict()
         optim.optimizer.load_state_dict(saved_optimizer_state_dict)
         if args.visible_gpus != '-1':
@@ -182,14 +182,25 @@ class ExtSummarizer(nn.Module):
 
         self.W_cont = nn.Parameter(torch.Tensor(1 ,self.bert.model.config.hidden_size))
         self.W_sim = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
+        self.Sim_layer= nn.Linear(self.bert.model.config.hidden_size,self.bert.model.config.hidden_size)
         # 重要度的内容可以
         self.W_rel = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
+        self.Rel_layer= nn.Linear(self.bert.model.config.hidden_size,self.bert.model.config.hidden_size)
         # self.W_doc = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
         self.W_novel = nn.Parameter(torch.Tensor(self.bert.model.config.hidden_size, self.bert.model.config.hidden_size))
 
         self.b_matrix = nn.Parameter(torch.Tensor(1, 1))
 
+        # self.layer_norm_sim = nn.LayerNorm(self.bert.model.config.hidden_size, eps=1e-6)
+        # self.layer_norm_rel = nn.LayerNorm(self.bert.model.config.hidden_size, eps=1e-6)
+        # self.layer_norm = nn.LayerNorm(1, eps=1e-6)
+
+
         self.q_transform = nn.Linear(100, 1)
+        self.bq = nn.Parameter(torch.Tensor(1, 1))
+        self.brel = nn.Parameter(torch.Tensor(1, 1))
+        self.bsim = nn.Parameter(torch.Tensor(1, 1))
+        self.bcont = nn.Parameter(torch.Tensor(1, 1))
 
 
         if checkpoint is not None:
@@ -212,14 +223,31 @@ class ExtSummarizer(nn.Module):
                 for p in self.q_transform.parameters():
                     if p.dim() > 1:
                         xavier_uniform_(p)
-
-
+                for p in self.Sim_layer.parameters():
+                    if p.dim() > 1:
+                        xavier_uniform_(p)
+                for p in self.Rel_layer.parameters():
+                    if p.dim() > 1:
+                        xavier_uniform_(p)
+                # for p in self.layer_norm_sim.parameters():
+                #     if p.dim() > 1:
+                #         xavier_uniform_(p)
+                # for p in self.layer_norm_rel.parameters():
+                #     if p.dim() > 1:
+                #         xavier_uniform_(p)
+                # for p in self.layer_norm.parameters():
+                #     if p.dim() > 1:
+                #         xavier_uniform_(p)
+            nn.init.xavier_uniform_(self.bq)
             nn.init.xavier_uniform_(self.W_cont)
             nn.init.xavier_uniform_(self.W_sim)
             nn.init.xavier_uniform_(self.W_rel)
             # nn.init.xavier_uniform_(self.W_doc)
             nn.init.xavier_uniform_(self.W_novel)
             nn.init.xavier_uniform_(self.b_matrix)
+            nn.init.xavier_uniform_(self.bcont)
+            nn.init.xavier_uniform_(self.brel)
+            nn.init.xavier_uniform_(self.bsim)
             # nn.init.xavier_uniform_(self.q_transform)
         self.to(device)
 
@@ -242,7 +270,7 @@ class ExtSummarizer(nn.Module):
             # 这里需要纵向的向量，横向向量最后加和的时候有问题，和novelty不一致
             Score_Cont = torch.mm(self.W_cont, sent_vec[i].transpose(0, 1)).transpose(0,1) * mask_cls[i].transpose(0,1)
 
-            score_cont = self.Cont_transform(sent_vec[i])
+            # score_cont = self.Cont_transform(sent_vec[i])
             # print("Score_Cont ", Score_Cont.size())
             # print(Score_Cont)
             #
@@ -251,12 +279,12 @@ class ExtSummarizer(nn.Module):
 
             tmp_Sim = torch.mm(sent_vec[i], self.W_sim)
             Score_Sim = torch.mm(tmp_Sim, sent_vec[i].transpose(0, 1)) * mask_my_own[i]
-            score_sim = self.Sim_transform(sent_vec[i], sent_vec[i])
-            print("score_sim ", Score_Sim.size())
-            print(Score_Sim)
-            print("bilinear ", score_sim.size())
-            print(score_sim)
-            exit()
+            # score_sim = self.Sim_transform(sent_vec[i], sent_vec[i])
+            # print("score_sim ", Score_Sim.size())
+            # print(Score_Sim)
+            # print("bilinear ", score_sim.size())
+            # print(score_sim)
+            # exit()
 
 
 
@@ -284,11 +312,12 @@ class ExtSummarizer(nn.Module):
 
             padding_zeros = torch.zeros(q.size(0), 50 - q.size(1)).to('cuda')
             q = torch.cat((q, padding_zeros), dim=1)
-            print("q", q.size())
-            print(q)
+            # print("q", q.size())
+            # print(q)
             q = self.q_transform(q)
+            q = self.layer_norm(q)
             score_gather = q[:mask_cls.size(1)]
-            exit()
+            # exit()
             # print("q ", q.size())
             # print(q)
 
@@ -480,7 +509,6 @@ class ExtSummarizer(nn.Module):
         # [batch_size, 1, hidden_size] * [batch_size, hidden_size, sent_num] = [batch_size, 1, sent_num]
         # Score_Cont = torch.bmm(torch.cat([self.W_cont] * sent_vec.size()[0]), sent_vec.transpose(1,2))
         # W_cont0 = self.W_cont.expand(sent_vec.size()[0], self.W_cont.size()[0], self.W_cont.size()[1])
-        W_cont0 = self.W_cont.unsqueeze(0)
         # print("W_cont0: ", W_cont0.size())
         # print(W_cont0)
         # print("sent_vec.transpose: ", sent_vec.transpose(1,2).size())
@@ -490,7 +518,8 @@ class ExtSummarizer(nn.Module):
         # print("mask_my_ own", mask_my_own.size())
         # print(mask_my_own)
 
-        Score_Cont = torch.matmul(W_cont0, sent_vec.transpose(1,2))
+        W_cont0 = self.W_cont.unsqueeze(0)
+        Score_Cont = torch.matmul(W_cont0, sent_vec.transpose(1,2)) + self.bcont
         # exit()
         # print("Score_Cont = ")
         # print(Score_Cont)
@@ -505,11 +534,14 @@ class ExtSummarizer(nn.Module):
 
         # [batch_size, sent_num, hidden_size] * [batch_size * hidden_size * hidden_size] = [batch_size, sent_num, hidden_size]
         # W_sim0 = self.W_sim.expand(sent_vec.size(0), self.W_sim.size(0), self.W_sim.size(0))
-        W_sim0 = self.W_sim.unsqueeze(0)
+        # W_sim0 = self.W_sim.unsqueeze(0)
         # tmp_Sim = torch.bmm(sent_vec, torch.cat([self.W_sim] * sent_vec.size()[0]))
-        tmp_Sim = torch.matmul(sent_vec, W_sim0)
+        # tmp_Sim = torch.matmul(sent_vec, W_sim0)
+        tmp_Sim = self.Sim_layer(sent_vec)
+        # tmp_Sim = self.layer_norm_sim(tmp_Sim)
+
         # [batch_size, sent_num, hidden_size] * [batch_size, hidden_size, sent_num] = [batch_size, sent_num, sent_num]
-        Score_Sim = torch.bmm(tmp_Sim, sent_vec.transpose(1,2)) * mask_my_own
+        Score_Sim = torch.bmm(tmp_Sim, sent_vec.transpose(1,2)) + self.bsim
 
         # print("Score_Sim = ", Score_Sim.size())
         # print(Score_Sim)
@@ -519,11 +551,14 @@ class ExtSummarizer(nn.Module):
 
 
         # W_rel0 = self.W_rel.expand(sent_vec.size()[0], self.W_rel.size()[0], self.W_rel.size()[1])
-        W_rel0 = self.W_rel.unsqueeze(0)
+        # W_rel0 = self.W_rel.unsqueeze(0)
         # [batch_size, sent_num, hidden_size] * [batch_size, hidden_size, hidden_size] = [batch_size, sent_num, hidden_size]
-        tmp_rel = torch.matmul(sent_vec, W_rel0)
+        # tmp_rel = torch.matmul(sent_vec, W_rel0)
+        tmp_rel = self.Rel_layer(sent_vec)
+        # tmp_rel = self.layer_norm_rel(tmp_rel)
+
         # [batch_size, sent_num, hidden_size] * [batch_size, hidden_size, 1] = [batch_size, 1, sent_num]
-        Score_rel = torch.bmm(tmp_rel, d_rep).transpose(1,2)
+        Score_rel = torch.bmm(tmp_rel, d_rep).transpose(1,2) + self.brel
         # Score_rel = Score_rel.expand(Score_rel.size()[0], sent_vec.size()[1], sent_vec.size()[1]).transpose(1,2) * mask_my_own
         # print("Score_rel = ", Score_rel.size())
         # print(Score_rel)
@@ -532,20 +567,24 @@ class ExtSummarizer(nn.Module):
 
 
         q = Score_rel.transpose(1,2) + Score_Cont.transpose(1,2) + Score_Sim + self.b_matrix
+        # print("q", q.size())
+        # print(q)
         # print("Final_score = ", Final_score.size())
         # print(Final_score)
         # [batch * sent_num * sent_num]
-        q = torch.sigmoid(q) * mask_my_own
+        # q = torch.sigmoid(q) * mask_my_own
+
         padding_zeros = torch.zeros(q.size(0), q.size(1), 100 - q.size(2)).to('cuda')
         q = torch.cat((q, padding_zeros), dim=2)
-        # print("q", q.size())
-        # print(q)
-        q = self.q_transform(q)
+
+        q = self.q_transform(q) + self.bq
+
+        # q = self.layer_norm(q)
         # print("q", q.squeeze(2).size())
         # print(q.squeeze(2))
         # print("mask")
         # print(mask_cls)
-        score_gather = torch.sigmoid(q.squeeze(2) * mask_cls.squeeze(1))
+        score_gather = torch.sigmoid(q.squeeze(2)) * mask_cls.squeeze(1)
         # print("score ", score_gather.size())
         # print(score_gather)
         # exit()
@@ -657,6 +696,9 @@ class ExtSummarizer(nn.Module):
 
         sents_vec = self.ext_layer(sents_vec, mask_cls).squeeze(-1)
         sent_scores = self.cal_matrix(sents_vec, mask_cls)
+        # print("sent_scores = ", sent_scores.size())
+        # print(sent_scores)
+        # exit()
 
         # print("sent_scores: ",sent_scores.size())
         # print(sent_scores)
@@ -738,6 +780,9 @@ class AbsSummarizer(nn.Module):
 
     def forward(self, src, tgt, segs, clss, mask_src, mask_tgt, mask_cls):
         top_vec = self.bert(src, segs, mask_src)
+        # print("!!!!!!!!!!!!!!!!!")
+        # print("top_vec ", top_vec.size())
+        # print(top_vec)
         dec_state = self.decoder.init_decoder_state(src, top_vec)
 
         # exit()
@@ -825,7 +870,7 @@ class HybridSummarizer(nn.Module):
             _, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
             # print("labels", labels.size())
             # print(labels)
-            ext_scores = (labels.float() + 0.1) / 1.15
+            ext_scores = ((labels.float() + 0.1) / 1.15) * mask_cls.float()
             # print("ext_scores, ", ext_scores.size())
             # print(ext_scores)
         else:
@@ -839,13 +884,18 @@ class HybridSummarizer(nn.Module):
 
         # print("encoder_state ", encoder_state.size())
         # print(encoder_state)
+        # print("decoder_outputs ", decoder_outputs.size())
+        # print(decoder_outputs)
 
         src_len = mask_src.size(-1)
-        src_pad_mask = src.eq(0).unsqueeze(1) \
-            .expand(src.size(0), tgt.size(-1) - 1, src_len)
-
-
-        # print("src_pad_mask22222", src_pad_mask.size())
+        # 2 * 50 * 194
+        src_pad_mask = (1 - mask_src).unsqueeze(1).repeat(1, tgt.size(1) - 1, 1)
+        # print("mask_src None", mask_src[:,:,None].size())
+        # print(mask_src[:,:,None])
+        # src_pad_mask = src.eq(0).unsqueeze(1) \
+        #     .expand(src.size(0), tgt.size(-1) - 1, src_len)
+        # print("src_len ", src_len)
+        # print("src_pad_mask ", src_pad_mask.size())
         # print(src_pad_mask)
         context_vector, attn_dist = self.context_attn(encoder_state, encoder_state, decoder_outputs,
                                       mask=src_pad_mask,
@@ -853,7 +903,9 @@ class HybridSummarizer(nn.Module):
                                       type="context")
 
         # print("context_vector ", context_vector.size())
-        # # print(context_vector)
+        # print(context_vector)
+        # print("attn_dist", attn_dist.size())
+        # print(attn_dist)
 
         # 2 * 50 * 768
 
@@ -861,24 +913,31 @@ class HybridSummarizer(nn.Module):
         # print("sent_vec ", sent_vec.size())
         # print("ext_scores", ext_scores.size())
         # print(ext_scores)
+        '''
         sorted_scores, sorted_scores_idx = torch.sort(ext_scores, dim=1, descending=True)
-        # print("sort example idx", sorted_scores_idx.size())
-        # print(sorted_scores_idx)
-        # print("sort example", sorted_scores.size())
-        # print(sorted_scores)
+        print("sort example idx", sorted_scores_idx.size())
+        print(sorted_scores_idx)
+        print("sort example", sorted_scores.size())
+        print(sorted_scores)
         # print("sent_vec ", sent_vec.size())
         # print(sent_vec)
-        select_num = min(3, sent_vec.size(1))
+
+        select_num = min(3, mask_cls.size(1))
+        # print("select num = ", mask_cls.float())
+
         selected_vec = torch.zeros(sent_vec.size(0), select_num ,sent_vec.size(2)).to('cuda')
+        print("selected_vec ", selected_vec.size())
+        print(selected_vec)
+        # exit()
         for i, batch in enumerate(selected_vec):
             selected = sent_vec[i].index_select(dim=0, index=sorted_scores_idx[i][:select_num])
-            # print("selected ", selected.size())
-            # print(selected)
-            # print("ext_scores",ext_scores[i][:select_num].unsqueeze(1).size())
-            # print(ext_scores[i][:select_num].unsqueeze(1))
+            print("selected ", selected.size())
+            print(selected)
+            print("ext_scores",ext_scores[i][:select_num].unsqueeze(1).size())
+            print(ext_scores[i][:select_num].unsqueeze(1))
             selected_vec[i] += selected * ext_scores[i][:select_num].unsqueeze(1)
-            # print("selected_vec[i] ", selected_vec[i].size())
-            # print(selected_vec[i])
+            print("selected_vec[i] ", selected_vec[i].size())
+            print(selected_vec[i])
             # exit()
 
         # selected_vec = sent_vec.index_select(dim=0, index = sorted_scores_idx[:, :3])
@@ -886,6 +945,8 @@ class HybridSummarizer(nn.Module):
         # print("before selected_vec_sum",selected_vec.sum(dim=1))
         E_sel = selected_vec.sum(dim=1).repeat(1, decoder_outputs.size(1))
         E_sel = E_sel.reshape(decoder_outputs.size())
+        '''
+
         # print("selected_vec_sum = ", E_sel.size())
         # print(E_sel)
 
@@ -902,14 +963,17 @@ class HybridSummarizer(nn.Module):
         # print(torch.cat([decoder_outputs, y_emb, context_vector], -1).size())
         # print("222222222")
         # print(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1),self.v, self.bv))
-        ext_dist = torch.zeros(attn_dist.size(0),attn_dist.size(1), self.abstractor.bert.model.config.vocab_size).to(self.device)
+        ext_dist = torch.zeros(attn_dist.size(0), attn_dist.size(1), self.abstractor.bert.model.config.vocab_size).to(self.device)
 
-        g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, E_sel, context_vector], -1), self.v, self.bv))
-        # g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv))
+        # g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, E_sel, context_vector], -1), self.v, self.bv))
+        g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv))
 
 
-        # src: 1 * x_len -> batch * y_len * x_len
         xids = src.unsqueeze(0).repeat(ext_dist.size(1), 1, 1).transpose(0,1)
+        # print("xids ", xids.size())
+        # print(xids)
+        # src: 1 * x_len -> batch * y_len * x_len
+        # 这段对cls加了mask，似乎出了问题，先删掉
         # print("ext_dist", ext_dist.size())
         # print("xids", xids.size())
         # print(xids)
@@ -927,6 +991,7 @@ class HybridSummarizer(nn.Module):
         # 这里是把cls等乱七八糟的屏蔽掉
         for i, each_batch in enumerate(clss):
             # print(i)
+            
             for j, each_start in enumerate(each_batch):
                 # print(j)
                 # 如果已经到边缘,那么直接跳出
@@ -957,9 +1022,12 @@ class HybridSummarizer(nn.Module):
 
 
                 # exit()
-
+        # print(ext_scores)
+        # print("ext_ = ", ext_scores.size())
+        # print(ext_scores)
         # print("attn_pad_mask", attn_pad_mask.size())
         # print(attn_pad_mask)
+        # exit()
         # attn_pad_mask = attn_pad_mask * attn_pad_mask_mask
 
 
@@ -991,8 +1059,22 @@ class HybridSummarizer(nn.Module):
         # print(attn_pad_mask)
         # print("attn_dist ", attn_dist.size())
         # print(attn_dist)
-        attn_dist = attn_dist * attn_pad_mask
-        ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * attn_dist)
+        
+        # attn_dist = attn_dist * attn_pad_mask
+        ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * attn_pad_mask)
+        # print("xids ", xids.size())
+        # print(xids)
+        # exit()
+        # torch.set_printoptions(profile="full")
+        # print("ext vocab ", ext_vocab_prob.size())
+        # print(ext_vocab_prob)
+        # torch.set_printoptions(profile="default")
+        # exit()
+        # print("ext vocab ", ext_vocab_prob.size())
+        # print(ext_vocab_prob)
+        # print("decoder outputs", decoder_outputs.size())
+        # print(decoder outputs)
+        # exit()
 
         # c = torch.zeros(attn_dist.size())
         # for i, each_batch in enumerate(c):
