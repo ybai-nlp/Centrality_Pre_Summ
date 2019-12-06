@@ -867,7 +867,7 @@ class HybridSummarizer(nn.Module):
         # print(mask_cls)
 
         if labels is not None:
-            _, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
+            # _, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
             # print("labels", labels.size())
             # print(labels)
             ext_scores = ((labels.float() + 0.1) / 1.15) * mask_cls.float()
