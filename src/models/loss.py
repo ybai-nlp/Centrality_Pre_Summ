@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import random
+from torch.autograd import Variable
 
 from models.reporter import Statistics
 
@@ -77,7 +78,7 @@ class LossComputeBase(nn.Module):
         """
         return NotImplementedError
 
-    def monolithic_compute_loss(self, batch, output):
+    def monolithic_compute_loss(self, batch, output, copy_params = None):
         """
         Compute the forward loss for the batch.
 
@@ -91,8 +92,11 @@ class LossComputeBase(nn.Module):
         Returns:
             :obj:`onmt.utils.Statistics`: loss statistics
         """
-        shard_state = self._make_shard_state(batch, output)
-        _, batch_stats = self._compute_loss(batch, **shard_state)
+        shard_state = self._make_shard_state(batch, output, copy_params)
+        output = shard_state['output']
+        target = shard_state['target']
+        # copy_params = (shard_state['copy_params[0]'], shard_state['copy_params[1]'])
+        _, batch_stats = self._compute_loss(batch, output, target)
 
         return batch_stats
 
@@ -135,8 +139,11 @@ class LossComputeBase(nn.Module):
             # print(shard)
             output = shard['output']
             target = shard['target']
-            copy_params = (shard['copy_params[0]'], shard['copy_params[1]'])
-            loss, stats = self._compute_loss(batch, output, target, copy_params)
+            g = shard['copy_params[1]']
+            ext_dist = shard['copy_params[0]']
+            # exit()
+            # copy_params = (shard['copy_params[0]'], shard['copy_params[1]'])
+            loss, stats = self._compute_loss(batch, output, target, g, ext_dist)
             # print("copy_params: ")
             # print(copy_params[0].size())
             # print(copy_params[0])
@@ -309,9 +316,112 @@ class PairwiseLoss(nn.Module):
         # return F.kl_div(output, model_prob, reduction='sum')
         return loss
 
+class NMTLossCompute(LossComputeBase):
+    """
+    Standard NMT Loss Computation.
+    """
+
+    def __init__(self, generator, symbols, vocab_size,
+                 label_smoothing=0.0):
+        super(NMTLossCompute, self).__init__(generator, symbols['PAD'])
+        self.sparse = not isinstance(generator[1], nn.LogSoftmax)
+        if label_smoothing > 0:
+            self.criterion = LabelSmoothingLoss(
+                label_smoothing, vocab_size, ignore_index=self.padding_idx
+            )
+        else:
+            self.criterion = nn.NLLLoss(
+                ignore_index=self.padding_idx, reduction='sum'
+            )
+
+    def _make_shard_state(self, batch, output, copy_params):
+        return {
+            "output": output,
+            "target": batch.tgt[:,1:],
+            "copy_params[0]": copy_params[0],
+            "copy_params[1]": copy_params[1],
+        }
+
+    def _compute_loss(self, batch, output, target, g=None, ext_dist=None):
+        bottled_output = self._bottle(output)
+        scores = self.generator(bottled_output)
+        scores = scores * self._bottle(g) + self._bottle(ext_dist)
+        scores = torch.log(scores)
+        gtruth =target.contiguous().view(-1)
+
+        loss = self.criterion(scores, gtruth)
+
+        stats = self._stats(loss.clone(), scores, gtruth)
+
+        return loss, stats
 
 
+def filter_shard_state(state, shard_size=None):
+    """ ? """
+    for k, v in state.items():
+        if shard_size is None:
+            yield k, v
 
+        if v is not None:
+            v_split = []
+            if isinstance(v, torch.Tensor):
+                for v_chunk in torch.split(v, shard_size):
+                    v_chunk = v_chunk.data.clone()
+                    v_chunk.requires_grad = v.requires_grad
+                    v_split.append(v_chunk)
+            yield k, (v, v_split)
+
+
+def shards(state, shard_size, eval_only=False):
+    """
+    Args:
+        state: A dictionary which corresponds to the output of
+               *LossCompute._make_shard_state(). The values for
+               those keys are Tensor-like or None.
+        shard_size: The maximum size of the shards yielded by the model.
+        eval_only: If True, only yield the state, nothing else.
+              Otherwise, yield shards.
+    Yields:
+        Each yielded shard is a dict.
+    Side effect:
+        After the last shard, this function does back-propagation.
+    """
+    if eval_only:
+        yield filter_shard_state(state)
+    else:
+        # non_none: the subdict of the state dictionary where the values
+        # are not None.
+        non_none = dict(filter_shard_state(state, shard_size))
+        # print("non none ", len(non_none))
+        # print(non_none)
+
+        # Now, the iteration:
+        # state is a dictionary of sequences of tensor-like but we
+        # want a sequence of dictionaries of tensors.
+        # First, unzip the dictionary into a sequence of keys and a
+        # sequence of tensor-like sequences.
+        keys, values = zip(*((k, [v_chunk for v_chunk in v_split])
+                             for k, (_, v_split) in non_none.items()))
+
+        # Now, yield a dictionary for each shard. The keys are always
+        # the same. values is a sequence of length #keys where each
+        # element is a sequence of length #shards. We want to iterate
+        # over the shards, not over the keys: therefore, the values need
+        # to be re-zipped by shard and then each shard can be paired
+        # with the keys.
+        for shard_tensors in zip(*values):
+            yield dict(zip(keys, shard_tensors))
+
+        # Assumed backprop'd
+        variables = []
+        for k, (v, v_split) in non_none.items():
+            if isinstance(v, torch.Tensor) and state[k].requires_grad:
+                variables.extend(zip(torch.split(state[k], shard_size),
+                                     [v_chunk.grad for v_chunk in v_split]))
+        inputs, grads = zip(*variables)
+        torch.autograd.backward(inputs, grads)
+
+'''
 class NMTLossCompute(LossComputeBase):
     """
     Standard NMT Loss Computation.
@@ -362,7 +472,8 @@ class NMTLossCompute(LossComputeBase):
             # print("new_scores")
             # print(new_scores.size())
             # print("scores softmax: ", scores.size())
-            scores = scores * copy_params[1].view(-1,copy_params[1].size(2)) + copy_params[0].view(-1,copy_params[0].size(2))
+
+            # scores = scores * copy_params[1].view(-1,copy_params[1].size(2)) + copy_params[0].view(-1,copy_params[0].size(2))
             scores = torch.log(scores)
 
 
@@ -375,8 +486,8 @@ class NMTLossCompute(LossComputeBase):
 
 
         loss = self.criterion(scores, gtruth)
-        # print('loss', loss.size())
-        # print(loss)
+        print('loss', loss.size())
+        print(loss)
 
         stats = self._stats(loss.clone(), scores, gtruth)
 
@@ -447,3 +558,4 @@ def shards(state, shard_size, eval_only=False):
                                      [v_chunk.grad for v_chunk in v_split]))
         inputs, grads = zip(*variables)
         torch.autograd.backward(inputs, grads)
+'''

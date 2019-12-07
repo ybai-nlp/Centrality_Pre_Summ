@@ -10,7 +10,7 @@ from models.decoder import TransformerDecoder
 from models.encoder import Classifier, ExtTransformerEncoder
 from models.optimizers import Optimizer
 from models.neural import MultiHeadedAttention
-
+from torch.autograd import Variable
 def build_optim(args, model, checkpoint):
     """ Build optimizer """
 
@@ -119,10 +119,11 @@ def build_optim_dec(args, model, checkpoint):
 
 
 def get_generator(vocab_size, dec_hidden_size, device, task):
-    if task == 'hybrid':
-        gen_func = nn.Softmax(dim=-1)
-    else:
-        gen_func = nn.LogSoftmax(dim=-1)
+    # if task == 'hybrid':
+    #     gen_func = nn.Softmax(dim=-1)
+    # else:
+    gen_func = nn.Softmax(dim=-1)
+    # gen_func = nn.LogSoftmax(dim=-1)
     generator = nn.Sequential(
         nn.Linear(dec_hidden_size, vocab_size),
         gen_func
@@ -214,19 +215,10 @@ class ExtSummarizer(nn.Module):
                 for p in self.ext_layer.parameters():
                     if p.dim() > 1:
                         xavier_uniform_(p)
-                # for p in self.Cont_transform.parameters():
-                #     if p.dim() > 1:
-                #         xavier_uniform_(p)
-                # for p in self.Sim_transform.parameters():
-                #     if p.dim() > 1:
-                #         xavier_uniform_(p)
-                for p in self.q_transform.parameters():
+                for p in self.Rel_layer.parameters():
                     if p.dim() > 1:
                         xavier_uniform_(p)
                 for p in self.Sim_layer.parameters():
-                    if p.dim() > 1:
-                        xavier_uniform_(p)
-                for p in self.Rel_layer.parameters():
                     if p.dim() > 1:
                         xavier_uniform_(p)
                 # for p in self.layer_norm_sim.parameters():
@@ -263,7 +255,7 @@ class ExtSummarizer(nn.Module):
         # print("sent_num = ")
         # print(sent_num)
         d_rep = sent_vec.mean(dim=1).unsqueeze(1).transpose(1,2)
-        score_gather = torch.zeros(1, sent_vec.size(1)).to(self.device)
+        score_gather = Variable(torch.zeros(1, sent_vec.size(1)).to(self.device))
         for i in range(sent_vec.size(0)): #对于每一个batch
             # print("sent_vec ", sent_vec.size())
             # exit()
@@ -310,7 +302,7 @@ class ExtSummarizer(nn.Module):
             q = Score_rel + Score_Cont + Score_Sim + self.b_matrix
             q = q * mask_my_own[i]
 
-            padding_zeros = torch.zeros(q.size(0), 50 - q.size(1)).to('cuda')
+            padding_zeros = Variable(torch.zeros(q.size(0), 50 - q.size(1)).to('cuda'))
             q = torch.cat((q, padding_zeros), dim=1)
             # print("q", q.size())
             # print(q)
@@ -480,7 +472,7 @@ class ExtSummarizer(nn.Module):
                 # print(y)
 
             len_ = D.size(0) - true_dim
-            tmp_zeros = torch.zeros(1, len_).to(self.device)
+            tmp_zeros = Variable(torch.zeros(1, len_).to(self.device))
             Final_score = torch.sigmoid(torch.cat((Final_score, tmp_zeros), dim=1) * sent_num[i]) * mask_cls[i]
             # print("sent_num[i]", sent_num[i])
             # print(Final_score.size())
@@ -574,7 +566,7 @@ class ExtSummarizer(nn.Module):
         # [batch * sent_num * sent_num]
         # q = torch.sigmoid(q) * mask_my_own
 
-        padding_zeros = torch.zeros(q.size(0), q.size(1), 100 - q.size(2)).to('cuda')
+        padding_zeros = Variable(torch.zeros(q.size(0), q.size(1), 100 - q.size(2)).to('cuda'))
         q = torch.cat((q, padding_zeros), dim=2)
 
         q = self.q_transform(q) + self.bq
@@ -818,6 +810,7 @@ class HybridSummarizer(nn.Module):
 
         self.v = nn.Parameter(torch.Tensor(1, self.args.dec_hidden_size * 3))
         self.bv = nn.Parameter(torch.Tensor(1))
+        self.attn_lin = nn.Linear(self.args.dec_hidden_size, self.args.dec_hidden_size)
 
 
         # bert 测试的时候直接全部load
@@ -825,6 +818,7 @@ class HybridSummarizer(nn.Module):
             self.load_state_dict(checkpoint['model'], strict=True)
             print("checkpoint loaded!")
         else:
+            self.attn_lin.weight.data.normal_(mean=0.0, std=0.02)
             # if args.param_init != 0.0:
             #     for p in self.extractor.parameters():
             #         p.data.uniform_(-args.param_init, args.param_init)
@@ -870,7 +864,7 @@ class HybridSummarizer(nn.Module):
             # _, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
             # print("labels", labels.size())
             # print(labels)
-            ext_scores = ((labels.float() + 0.1) / 1.15) * mask_cls.float()
+            ext_scores = ((labels.float() + 0.1) / 1.3) * mask_cls.float()
             # print("ext_scores, ", ext_scores.size())
             # print(ext_scores)
         else:
@@ -880,14 +874,14 @@ class HybridSummarizer(nn.Module):
 
         # batchsize * (tgt_len - 1) * hidden_size
         # 这个隐状态输出出去之后，回到train_abstractive.py的loss计算函数中，然后到loss.py的计算loss函数中，过一个generator的ff层，投影成vocab_size大小的概率分布
-        decoder_outputs, encoder_state, y_emb =  self.abstractor(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
+        decoder_outputs, encoder_state, y_emb = self.abstractor(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
 
         # print("encoder_state ", encoder_state.size())
         # print(encoder_state)
         # print("decoder_outputs ", decoder_outputs.size())
         # print(decoder_outputs)
 
-        src_len = mask_src.size(-1)
+        # src_len = mask_src.size(-1)
         # 2 * 50 * 194
         src_pad_mask = (1 - mask_src).unsqueeze(1).repeat(1, tgt.size(1) - 1, 1)
         # print("mask_src None", mask_src[:,:,None].size())
@@ -901,7 +895,8 @@ class HybridSummarizer(nn.Module):
                                       mask=src_pad_mask,
                                       # layer_cache=layer_cache,
                                       type="context")
-
+        # context_vector = self.attn_lin(context_vector)
+        # context_vector = context_vector * mask_tgt.unsqueeze(2)[:,:-1,:].float()
         # print("context_vector ", context_vector.size())
         # print(context_vector)
         # print("attn_dist", attn_dist.size())
@@ -963,13 +958,34 @@ class HybridSummarizer(nn.Module):
         # print(torch.cat([decoder_outputs, y_emb, context_vector], -1).size())
         # print("222222222")
         # print(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1),self.v, self.bv))
-        ext_dist = torch.zeros(attn_dist.size(0), attn_dist.size(1), self.abstractor.bert.model.config.vocab_size).to(self.device)
 
         # g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, E_sel, context_vector], -1), self.v, self.bv))
+        # print("decoder outputs", decoder_outputs)
+        # print("y_emb", y_emb)
+        # print("context vector", context_vector)
+        # g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv)) * mask_tgt.unsqueeze(2)[:,:-1,:].float()
         g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv))
+        # print("g ", g.size())
+        # print(g)
+        if torch.isnan(g[0][0]):
+            print("ops!")
+            exit()
 
 
-        xids = src.unsqueeze(0).repeat(ext_dist.size(1), 1, 1).transpose(0,1)
+        # g = g * mask_tgt.unsqueeze(2)[:,:-1,:].float()
+        # print("context_vector ", context_vector.size())
+        # print(context_vector)
+        # exit()
+
+        xids = src.unsqueeze(0).repeat(tgt.size(1) - 1, 1, 1).transpose(0,1)
+
+        # print("mask_tgt ", mask_tgt.unsqueeze(2).size())
+        # print(mask_tgt.unsqueeze(2))
+        xids = xids * mask_tgt.unsqueeze(2)[:,:-1,:].long()
+
+        # print("xids = ", xids.size())
+        # print(xids)
+        # exit()
         # print("xids ", xids.size())
         # print(xids)
         # src: 1 * x_len -> batch * y_len * x_len
@@ -979,7 +995,8 @@ class HybridSummarizer(nn.Module):
         # print(xids)
 
         # 留下正常字符，不正常字符的加成为0
-        attn_pad_mask = xids.ge(105).float()
+        # attn_pad_mask = Variable(torch.zeros(xids.size()).to('cuda'))
+
             # .expand(tgt_batch, tgt_len, tgt_len)
         # attn_pad_mask_mask = attn_pad_mask
 
@@ -988,7 +1005,71 @@ class HybridSummarizer(nn.Module):
         # print(attn_pad_mask)
         # torch.set_printoptions(profile="default")
 
-        # 这里是把cls等乱七八糟的屏蔽掉
+        # 这里是把cls等乱七八糟的屏蔽掉,想办法用cat来做把，这么写肯定是有问题的。
+        # 先把clss的值解压开，然后每个值重复
+        # print("clss ", clss.size())
+        # print(clss)
+        # print("src ", src.size())
+        # print(src)
+        len0 = src.size(1)
+        len0 = torch.Tensor([[len0]]).repeat(src.size(0), 1).long().to('cuda')
+        # zero = torch.Tensor([[0]]).repeat(src.size(0), 1).long().to('cuda')
+        # print("len0 ", len0)
+        clss_up = torch.cat((clss, len0), dim=1)
+        # print("clss_up = ", clss_up)
+        # clss_down = torch.cat((zero, clss), dim=1)
+        # print("clss_down = ", clss_down)
+        sent_len = (clss_up[:, 1:] - clss) * mask_cls.long()
+        # print("sent_len = ", sent_len.size())
+        # print(sent_len)
+        for i in range(mask_cls.size(0)):
+            for j in range(mask_cls.size(1)):
+                if sent_len[i][j] < 0:
+                    sent_len[i][j] += src.size(1)
+        # print("sent_len = ", sent_len.size())
+        # print(sent_len)
+        # print("attn_dist = ", attn_dist.size())
+        # print(attn_dist)
+
+        ext_scores_0 = ext_scores.unsqueeze(1).transpose(1,2).repeat(1,1, src.size(1))
+        # print("ext scores ", ext_scores.size())
+        # print(ext_scores)
+        for i in range(clss.size(0)):
+            tmp_vec = ext_scores_0[i, 0, :sent_len[i][0].int()]
+
+            for j in range(1, clss.size(1)):
+                tmp_vec = torch.cat((tmp_vec, ext_scores_0[i, j, :sent_len[i][j].int()]), dim=0)
+            # for j in range(1, clss.size(1)):
+            # print("tmp_vec ", tmp_vec.size())
+            # print(tmp_vec)
+            if i == 0:
+                ext_scores_new = tmp_vec.unsqueeze(0)
+            else:
+                ext_scores_new = torch.cat((ext_scores_new, tmp_vec.unsqueeze(0)), dim=0)
+        # print("ext_scores new1 ", ext_scores_new.size())
+        # print(ext_scores_new)
+        ext_scores_new = ext_scores_new * mask_src.float()
+        # print("ext_scores new2 ", ext_scores_new.size())
+        # print(ext_scores_new)
+        attn_dist = attn_dist * (ext_scores_new + 1).unsqueeze(1)
+        # print(attn_dist)
+        #
+        # exit()
+        # attn_dist = attn_dist.unsqueeze(1)
+
+
+
+
+
+
+
+
+
+
+
+        '''
+        # exit()
+
         for i, each_batch in enumerate(clss):
             # print(i)
             
@@ -1042,6 +1123,7 @@ class HybridSummarizer(nn.Module):
         # print("G = ", g.size())
         # print(g)
         # exit()
+        '''
 
 
 
@@ -1061,7 +1143,10 @@ class HybridSummarizer(nn.Module):
         # print(attn_dist)
         
         # attn_dist = attn_dist * attn_pad_mask
-        ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * attn_pad_mask)
+
+        ext_dist = Variable(torch.zeros(tgt.size(0), tgt.size(1) - 1, self.abstractor.bert.model.config.vocab_size).to(self.device))
+        # ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * mask_tgt.unsqueeze(2)[:,:-1,:].float() * attn_pad_mask) * mask_tgt.unsqueeze(2)[:,:-1,:].float()
+        ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * mask_tgt.unsqueeze(2)[:,:-1,:].float() * attn_dist) * mask_tgt.unsqueeze(2)[:,:-1,:].float()
         # print("xids ", xids.size())
         # print(xids)
         # exit()
@@ -1128,6 +1213,8 @@ class HybridSummarizer(nn.Module):
         #
         # print("decoder_outputs ", decoder_outputs.size())
         # print(decoder_outputs)
+        # print("context vectors ", context_vector.size())
+        # print(context_vector)
         # exit()
 
         '''
@@ -1140,4 +1227,9 @@ class HybridSummarizer(nn.Module):
         '''
         # exit()
         # 先过bert层
+        # print("ext_vocab_prob ", ext_vocab_prob.size())
+        # print(ext_vocab_prob)
+        # print("g",g.size())
+        # print(g)
+        # return decoder_outputs, None
         return decoder_outputs, None, (ext_vocab_prob, g)

@@ -205,23 +205,23 @@ class Trainer(object):
                 if self.args.task == 'hybrid':
                     outputs, scores, copy_params = self.model(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
 
-                    bottled_output = self.loss._bottle(outputs)
+                    # bottled_output = self.loss._bottle(outputs)
                     # print("bottled_output ", bottled_output.size())
                     # print("copy_params ", copy_params)
                     # print(bottled_output)
                     # exit()
-                    scores = self.loss.generator(bottled_output)
+                    # scores = self.loss.generator(bottled_output)
                     # if copy_params:
                     # print("ex prob")
                     # print(copy_params[0].size())
                     # print("g")
                     # print(copy_params[1].size())
-                    new_scores = copy_params[1] * copy_params[0]
+                    # new_scores = copy_params[1]
                     # print("new_scores")
                     # print(new_scores.size())
                     # print("scores softmax: ", scores.size())
-                    scores = scores + new_scores.view(scores.size(0), scores.size(1))
-                    scores = torch.log(scores)
+                    # scores = scores * copy_params[0].view(scores.size(0), scores.size(1)) + new_scores.view(scores.size(0), scores.size(1))
+                    # scores = torch.log(scores)
                 else:
                     outputs, _ = self.model(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
 
@@ -259,6 +259,14 @@ class Trainer(object):
                 # print("ext_outputs", copy_params[0].size())
 
                 batch_stats = self.loss.sharded_compute_loss(batch, outputs, self.args.generator_shard_size, normalization, copy_params)
+                paramss = list(self.model.named_parameters())
+                for each in paramss:
+                    try:
+                        if torch.isnan(each[1].grad.sum()):
+                            print("fuck ", each[0])
+                    except:
+                        continue
+
 
             else:
                 outputs, scores = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls)

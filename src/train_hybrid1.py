@@ -10,27 +10,37 @@ import os
 import random
 import signal
 import time
+
 import torch
-import distributed
 from pytorch_transformers import BertTokenizer
+
+import distributed
 from models import data_loader, model_builder
 from models.data_loader import load_dataset
-from models.model_builder import ExtSummarizer, HybridSummarizer
 from models.loss import abs_loss
+from models.model_builder import HybridSummarizer
+from models.predictor import build_predictor
 from models.trainer import build_trainer
 from others.logging import logger, init_logger
-model_flags = ['hidden_size', 'ff_size', 'heads', 'inter_layers', 'encoder', 'ff_actv', 'use_interval', 'rnn_size']
-# symbols = {'BOS': tokenizer.vocab['[unused0]'], 'EOS': tokenizer.vocab['[unused1]'],
-#            'PAD': tokenizer.vocab['[PAD]'], 'EOQ': tokenizer.vocab['[unused2]']}
 
-def train_multi_hybrid(args):
+model_flags = ['hidden_size', 'ff_size', 'heads', 'emb_size', 'enc_layers', 'enc_hidden_size', 'enc_ff_size',
+               'dec_layers', 'dec_hidden_size', 'dec_ff_size', 'encoder', 'ff_actv', 'use_interval']
+
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+def train_abs_multi(args):
     """ Spawns 1 process per GPU """
-    # 每个gpu生成一个进程
     init_logger()
 
-    # gpu数量
     nb_gpu = args.world_size
-    # 用spawn方法做多线程
     mp = torch.multiprocessing.get_context('spawn')
 
     # Create a thread to listen for errors in the child processes.
@@ -41,12 +51,10 @@ def train_multi_hybrid(args):
     procs = []
     for i in range(nb_gpu):
         device_id = i
-        # 加入一个新的线程,这个线程跑run函数, device_id是对应的gpu
         procs.append(mp.Process(target=run, args=(args,
                                                   device_id, error_queue,), daemon=True))
         procs[i].start()
         logger.info(" Starting process pid: %d  " % procs[i].pid)
-        # 让出错处理器监视子线程
         error_handler.add_child(procs[i].pid)
     for p in procs:
         p.join()
@@ -54,6 +62,7 @@ def train_multi_hybrid(args):
 
 def run(args, device_id, error_queue):
     """ run process """
+
     setattr(args, 'gpu_ranks', [int(i) for i in args.gpu_ranks])
 
     try:
@@ -63,8 +72,7 @@ def run(args, device_id, error_queue):
             raise AssertionError("An error occurred in \
                   Distributed initialization")
 
-        # 然后回到训练单个模型的地方
-        train_single_hybrid(args, device_id)
+        train_abs_single(args, device_id)
     except KeyboardInterrupt:
         pass  # killed by parent, do nothing
     except Exception:
@@ -117,13 +125,15 @@ def validate_hybrid(args, device_id):
         xent_lst = []
         for i, cp in enumerate(cp_files):
             step = int(cp.split('.')[-2].split('_')[-1])
+            if (args.test_start_from != -1 and step < args.test_start_from):
+                xent_lst.append((1e6, cp))
+                continue
             xent = validate(args, device_id, cp, step)
             xent_lst.append((xent, cp))
             max_step = xent_lst.index(min(xent_lst))
             if (i - max_step > 10):
                 break
-        xent_lst = sorted(xent_lst, key=lambda x: x[0])[:3]
-        # print("????")
+        xent_lst = sorted(xent_lst, key=lambda x: x[0])[:5]
         logger.info('PPL %s' % str(xent_lst))
         for xent, cp in xent_lst:
             step = int(cp.split('.')[-2].split('_')[-1])
@@ -176,13 +186,12 @@ def validate(args, device_id, pt, step):
                                         args.batch_size, device,
                                         shuffle=False, is_test=False)
 
-
-    # tokenizer = BertTokenizer.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', do_lower_case=True, cache_dir=args.temp_dir)
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True, cache_dir=args.temp_dir)
+    tokenizer = BertTokenizer.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', do_lower_case=True, cache_dir=args.temp_dir)
+    # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True, cache_dir=args.temp_dir)
     symbols = {'BOS': tokenizer.vocab['[unused0]'], 'EOS': tokenizer.vocab['[unused1]'],
                'PAD': tokenizer.vocab['[PAD]'], 'EOQ': tokenizer.vocab['[unused2]']}
-    valid_loss = abs_loss(model.abstractor.generator, symbols, model.abstractor.vocab_size, device, train=True,
-                          label_smoothing=args.label_smoothing)
+
+    valid_loss = abs_loss(model.generator, symbols, model.vocab_size, train=False, device=device)
 
     trainer = build_trainer(args, device_id, model, None, valid_loss)
     stats = trainer.validate(valid_iter, step)
@@ -196,6 +205,7 @@ def test_hybrid(args, device_id, pt, step):
     else:
         test_from = args.test_from
     logger.info('Loading checkpoint from %s' % test_from)
+
     checkpoint = torch.load(test_from, map_location=lambda storage, loc: storage)
     opt = vars(checkpoint['opt'])
     for k in opt.keys():
@@ -209,25 +219,66 @@ def test_hybrid(args, device_id, pt, step):
     test_iter = data_loader.Dataloader(args, load_dataset(args, 'test', shuffle=False),
                                        args.test_batch_size, device,
                                        shuffle=False, is_test=True)
-    # tokenizer = BertTokenizer.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', do_lower_case=True, cache_dir=args.temp_dir)
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True, cache_dir=args.temp_dir)
+    tokenizer = BertTokenizer.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', do_lower_case=True, cache_dir=args.temp_dir)
+    # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True, cache_dir=args.temp_dir)
     symbols = {'BOS': tokenizer.vocab['[unused0]'], 'EOS': tokenizer.vocab['[unused1]'],
                'PAD': tokenizer.vocab['[PAD]'], 'EOQ': tokenizer.vocab['[unused2]']}
-    trainer = build_trainer(args, device_id, model, None)
-    trainer.test(test_iter, step)
+    predictor = build_predictor(args, tokenizer, symbols, model, logger)
+    predictor.translate(test_iter, step)
+
+
+def test_text_abs(args, device_id, pt, step):
+    device = "cpu" if args.visible_gpus == '-1' else "cuda"
+    if (pt != ''):
+        test_from = pt
+    else:
+        test_from = args.test_from
+    logger.info('Loading checkpoint from %s' % test_from)
+
+    checkpoint = torch.load(test_from, map_location=lambda storage, loc: storage)
+    opt = vars(checkpoint['opt'])
+    for k in opt.keys():
+        if (k in model_flags):
+            setattr(args, k, opt[k])
+    print(args)
+
+    model = HybridSummarizer(args, device, checkpoint)
+    model.eval()
+
+    test_iter = data_loader.Dataloader(args, load_dataset(args, 'test', shuffle=False),
+                                       args.test_batch_size, device,
+                                       shuffle=False, is_test=True)
+    tokenizer = BertTokenizer.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', do_lower_case=True, cache_dir=args.temp_dir)
+    # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True, cache_dir=args.temp_dir)
+    symbols = {'BOS': tokenizer.vocab['[unused0]'], 'EOS': tokenizer.vocab['[unused1]'],
+               'PAD': tokenizer.vocab['[PAD]'], 'EOQ': tokenizer.vocab['[unused2]']}
+    predictor = build_predictor(args, tokenizer, symbols, model, logger)
+    predictor.translate(test_iter, step)
+
+
+def baseline(args, cal_lead=False, cal_oracle=False):
+    test_iter = data_loader.Dataloader(args, load_dataset(args, 'test', shuffle=False),
+                                       args.batch_size, 'cpu',
+                                       shuffle=False, is_test=True)
+
+    trainer = build_trainer(args, '-1', None, None, None)
+    #
+    if (cal_lead):
+        trainer.test(test_iter, 0, cal_lead=True)
+    elif (cal_oracle):
+        trainer.test(test_iter, 0, cal_oracle=True)
+
 
 def train_hybrid(args, device_id):
-    # 是否选择多gpu
     if (args.world_size > 1):
-        train_multi_hybrid(args)
+        train_abs_multi(args)
     else:
-        # print("~~~~~~~~~~~~~~~")
-        train_single_hybrid(args, device_id)
+        train_abs_single(args, device_id)
 
 
-def train_single_hybrid(args, device_id):
+def train_abs_single(args, device_id):
     init_logger(args.log_file)
-
+    logger.info(str(args))
     device = "cpu" if args.visible_gpus == '-1' else "cuda"
     logger.info('Device ID %d' % device_id)
     logger.info('Device %s' % device)
@@ -239,11 +290,6 @@ def train_single_hybrid(args, device_id):
         torch.cuda.set_device(device_id)
         torch.cuda.manual_seed(args.seed)
 
-    # 重新设定随机种子
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
-    torch.backends.cudnn.deterministic = True
-
     if args.train_from != '':
         logger.info('Loading checkpoint from %s' % args.train_from)
         checkpoint = torch.load(args.train_from,
@@ -251,69 +297,47 @@ def train_single_hybrid(args, device_id):
         opt = vars(checkpoint['opt'])
         for k in opt.keys():
             if (k in model_flags):
-                # 给attr加属性
                 setattr(args, k, opt[k])
     else:
         checkpoint = None
 
-
-    if args.train_from_extractor != '':
-        logger.info('Loading checkpoint from %s' % args.train_from_extractor)
-        checkpoint_ext = torch.load(args.train_from_extractor,
-                                map_location=lambda storage, loc: storage)
-        opt = vars(checkpoint['opt'])
-        for k in opt.keys():
-            if (k in model_flags):
-                # 给attr加属性
-                setattr(args, k, opt[k])
+    if (args.load_from_extractive != ''):
+        logger.info('Loading bert from extractive model %s' % args.load_from_extractive)
+        bert_from_extractive = torch.load(args.load_from_extractive, map_location=lambda storage, loc: storage)
+        bert_from_extractive = bert_from_extractive['model']
     else:
-        checkpoint_ext = None
-
-
+        bert_from_extractive = None
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    torch.backends.cudnn.deterministic = True
 
     def train_iter_fct():
-        # 读一次数据
         if args.is_debugging:
-            print("YES it is debugging")
-            # 第三个参数是batch_size
+            # print("YES it is debugging")
             return data_loader.Dataloader(args, load_dataset(args, 'test', shuffle=False), args.batch_size, device,
                                       shuffle=False, is_test=False)
-            # exit()
         else:
             return data_loader.Dataloader(args, load_dataset(args, 'train', shuffle=True), args.batch_size, device,
                                       shuffle=True, is_test=False)
 
-    # modules, consts, options = init_modules()
-    # 选择模型: ExtSummarizer
-    # print("1~~~~~~~~~~~~~~~~~~~~")
-    model = HybridSummarizer(args, device,  checkpoint, checkpoint_ext=checkpoint_ext)
-    # 建优化器
-    # print("2~~~~~~~~~~~~~~~~~~~~")
-    # optim = model_builder.build_optim(args, model, checkpoint)
+    model = HybridSummarizer(args, device, checkpoint, bert_from_extractive)
     if (args.sep_optim):
         optim_bert = model_builder.build_optim_bert(args, model, checkpoint)
         optim_dec = model_builder.build_optim_dec(args, model, checkpoint)
         optim = [optim_bert, optim_dec]
-        # print("optim")
-        # print(optim)
-        # exit()
-
     else:
         optim = [model_builder.build_optim(args, model, checkpoint)]
 
-    # 做log
     logger.info(model)
 
-    # print("3~~~~~~~~~~~~~~~~~~~~")
-    # 建训练器
     # tokenizer = BertTokenizer.from_pretrained('/home/ybai/projects/PreSumm/PreSumm/temp/', do_lower_case=True, cache_dir=args.temp_dir)
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True, cache_dir=args.temp_dir)
     symbols = {'BOS': tokenizer.vocab['[unused0]'], 'EOS': tokenizer.vocab['[unused1]'],
                'PAD': tokenizer.vocab['[PAD]'], 'EOQ': tokenizer.vocab['[unused2]']}
-    train_loss = abs_loss(model.abstractor.generator, symbols, model.abstractor.vocab_size, device, train=True,
+
+    train_loss = abs_loss(model.generator, symbols, model.vocab_size, device, train=True,
                           label_smoothing=args.label_smoothing)
+
     trainer = build_trainer(args, device_id, model, optim, train_loss)
 
-    # print("4~~~~~~~~~~~~~~~~~~~~")
-    # 开始训练
     trainer.train(train_iter_fct, args.train_steps)

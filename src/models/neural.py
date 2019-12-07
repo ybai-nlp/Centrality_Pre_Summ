@@ -299,8 +299,8 @@ class MultiHeadedAttention(nn.Module):
         self.need_distribution = need_distribution
         if (self.use_final_linear):
             self.final_linear = nn.Linear(model_dim, model_dim)
-            if self.need_distribution:
-                self.final_linear_dist = nn.Linear(model_dim, model_dim)
+            # if self.need_distribution:
+            #     self.final_linear_dist = nn.Linear(model_dim, model_dim)
 
     def forward(self, key, value, query, mask=None,
                 layer_cache=None, type=None, predefined_graph_1=None):
@@ -424,6 +424,9 @@ class MultiHeadedAttention(nn.Module):
         # 3) Apply attention dropout and compute context vectors.
 
         attn = self.softmax(scores)
+        # if self.need_distribution:
+        #     print("attn ", attn.size())
+        #     print(attn)
 
         if (not predefined_graph_1 is None):
             attn_masked = attn[:, -1] * predefined_graph_1
@@ -444,6 +447,7 @@ class MultiHeadedAttention(nn.Module):
             output = self.final_linear(context)
             if self.need_distribution:
                 # merge_attn = attn.transpose(1, 2).contiguous().view(batch_size, -1, attn.size(-2) * attn.size(-1))
+                # print("output_attn")
                 output_attn = attn[:,0,:,:]
 
                 # output_attn =  self.final_linear_dist(merge_attn)
