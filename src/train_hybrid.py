@@ -18,6 +18,7 @@ from models.data_loader import load_dataset
 from models.model_builder import ExtSummarizer, HybridSummarizer
 from models.loss import abs_loss
 from models.trainer import build_trainer
+from models.predictor import build_predictor
 from others.logging import logger, init_logger
 model_flags = ['hidden_size', 'ff_size', 'heads', 'inter_layers', 'encoder', 'ff_actv', 'use_interval', 'rnn_size']
 # symbols = {'BOS': tokenizer.vocab['[unused0]'], 'EOS': tokenizer.vocab['[unused1]'],
@@ -213,8 +214,8 @@ def test_hybrid(args, device_id, pt, step):
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True, cache_dir=args.temp_dir)
     symbols = {'BOS': tokenizer.vocab['[unused0]'], 'EOS': tokenizer.vocab['[unused1]'],
                'PAD': tokenizer.vocab['[PAD]'], 'EOQ': tokenizer.vocab['[unused2]']}
-    trainer = build_trainer(args, device_id, model, None)
-    trainer.test(test_iter, step)
+    predictor = build_predictor(args, tokenizer, symbols, model, logger)
+    predictor.translate(test_iter, step)
 
 def train_hybrid(args, device_id):
     # 是否选择多gpu
@@ -261,7 +262,7 @@ def train_single_hybrid(args, device_id):
         logger.info('Loading checkpoint from %s' % args.train_from_extractor)
         checkpoint_ext = torch.load(args.train_from_extractor,
                                 map_location=lambda storage, loc: storage)
-        opt = vars(checkpoint['opt'])
+        opt = vars(checkpoint_ext['opt'])
         for k in opt.keys():
             if (k in model_flags):
                 # 给attr加属性
@@ -269,7 +270,17 @@ def train_single_hybrid(args, device_id):
     else:
         checkpoint_ext = None
 
-
+    if args.train_from_abstractor != '':
+        logger.info('Loading checkpoint from %s' % args.train_from_abstractor)
+        checkpoint_abs = torch.load(args.train_from_abstractor,
+                                map_location=lambda storage, loc: storage)
+        opt = vars(checkpoint_abs['opt'])
+        for k in opt.keys():
+            if (k in model_flags):
+                # 给attr加属性
+                setattr(args, k, opt[k])
+    else:
+        checkpoint_abs = None
 
     def train_iter_fct():
         # 读一次数据
@@ -286,7 +297,7 @@ def train_single_hybrid(args, device_id):
     # modules, consts, options = init_modules()
     # 选择模型: ExtSummarizer
     # print("1~~~~~~~~~~~~~~~~~~~~")
-    model = HybridSummarizer(args, device,  checkpoint, checkpoint_ext=checkpoint_ext)
+    model = HybridSummarizer(args, device,  checkpoint, checkpoint_ext=checkpoint_ext, checkpoint_abs=checkpoint_abs)
     # 建优化器
     # print("2~~~~~~~~~~~~~~~~~~~~")
     # optim = model_builder.build_optim(args, model, checkpoint)
@@ -294,6 +305,7 @@ def train_single_hybrid(args, device_id):
         optim_bert = model_builder.build_optim_bert(args, model, checkpoint)
         optim_dec = model_builder.build_optim_dec(args, model, checkpoint)
         optim = [optim_bert, optim_dec]
+        # print("????????")
         # print("optim")
         # print(optim)
         # exit()

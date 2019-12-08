@@ -107,6 +107,7 @@ if __name__ == '__main__':
 
     parser.add_argument("-train_from", default='')
     parser.add_argument("-train_from_extractor", default='')
+    parser.add_argument("-train_from_abstractor", default='')
     parser.add_argument("-report_rouge", type=str2bool, nargs='?',const=True,default=True)
     parser.add_argument("-block_trigram", type=str2bool, nargs='?', const=True, default=True)
 
@@ -124,6 +125,10 @@ if __name__ == '__main__':
         help='use hybrid oracle to train hybrid model')
     parser.add_argument(
         '--self_compare',
+        action='store_true',
+        help='use hybrid oracle to train hybrid model')
+    parser.add_argument(
+        '--cal_square',
         action='store_true',
         help='use hybrid oracle to train hybrid model')
     # parser.add_argument(

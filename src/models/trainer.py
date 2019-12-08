@@ -203,8 +203,13 @@ class Trainer(object):
                 mask_cls = batch.mask_cls
 
                 if self.args.task == 'hybrid':
-                    outputs, scores, copy_params = self.model(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
-
+                    # outputs, scores, copy_params = self.model(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
+                    if self.args.oracle:
+                        labels = batch.src_sent_labels
+                        outputs, scores, copy_params = self.model(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls,
+                                                                  labels)
+                    else:
+                        outputs, scores, copy_params = self.model(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
                     # bottled_output = self.loss._bottle(outputs)
                     # print("bottled_output ", bottled_output.size())
                     # print("copy_params ", copy_params)
@@ -225,7 +230,7 @@ class Trainer(object):
                 else:
                     outputs, _ = self.model(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
 
-                batch_stats = self.loss.monolithic_compute_loss(batch, outputs)
+                batch_stats = self.loss.monolithic_compute_loss(batch, outputs, copy_params)
                 stats.update(batch_stats)
             self._report_step(0, step, valid_stats=stats)
             return stats

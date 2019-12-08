@@ -96,7 +96,7 @@ class LossComputeBase(nn.Module):
         output = shard_state['output']
         target = shard_state['target']
         # copy_params = (shard_state['copy_params[0]'], shard_state['copy_params[1]'])
-        _, batch_stats = self._compute_loss(batch, output, target)
+        _, batch_stats = self._compute_loss(batch, output, target, g=copy_params[1], ext_dist=copy_params[0])
 
         return batch_stats
 

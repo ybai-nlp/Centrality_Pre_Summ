@@ -74,11 +74,11 @@ def build_optim_bert(args, model, checkpoint):
 
     # print("optim")
     # print(optim)
-    print("named_parameters")
+    # print("named_parameters")
     # for each in model.named_parameters():
     #     print(each)
     # params = [(n, p) for n, p in list(model.named_parameters()) if n.startswith('bert.model')]
-    params = [(n, p) for n, p in list(model.named_parameters()) if 'bert.model' in n]
+    params = [(n, p) for n, p in list(model.named_parameters()) if ('bert.model' in n) ]
     # print(params)
     optim.set_parameters(params)
     # exit()
@@ -111,7 +111,12 @@ def build_optim_dec(args, model, checkpoint):
             decay_method='noam',
             warmup_steps=args.warmup_steps_dec)
 
-    params = [(n, p) for n, p in list(model.named_parameters()) if not n.startswith('bert.model')]
+    # params = [(n, p) for n, p in list(model.named_parameters()) if not n.startswith('bert.model')]
+    params = [(n, p) for n, p in list(model.named_parameters()) if not ('bert.model' in n)]
+    # params = [(n, p) for n, p in list(model.named_parameters()) if not (n.startswith('bert.model') or ('abstractor' in n))]
+    # for each in model.named_parameters():
+    #     print(each)
+    # exit()
     optim.set_parameters(params)
 
 
@@ -159,6 +164,7 @@ class ExtSummarizer(nn.Module):
         self.args = args
         self.device = device
         self.lamb = lamb
+        # if args.
         # bert
         self.bert = Bert(args.large, args.temp_dir, args.finetune_bert)
 
@@ -747,6 +753,7 @@ class AbsSummarizer(nn.Module):
 
 
         if checkpoint is not None:
+            print("abstractor loaded !!!!!!!!!!!!!!!!!!!!!!!!")
             self.load_state_dict(checkpoint['model'], strict=True)
         else:
             for module in self.decoder.modules():

@@ -53,7 +53,7 @@ class Translator(object):
 
         self.args = args
         self.model = model
-        self.generator = self.model.generator
+        self.generator = self.model.abstractor.generator
         self.vocab = vocab
         self.symbols = symbols
         self.start_token = symbols['BOS']
