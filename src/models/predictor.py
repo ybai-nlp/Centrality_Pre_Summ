@@ -142,15 +142,18 @@ class Translator(object):
         # pred_results, gold_results = [], []
         ct = 0
         with torch.no_grad():
+            pos = 0
             for batch in data_iter:
+                print("now is the batch ", pos, end='\r')
+                pos += 1
                 if(self.args.recall_eval):
                     gold_tgt_len = batch.tgt.size(1)
                     self.min_length = gold_tgt_len + 20
                     self.max_length = gold_tgt_len + 60
                 batch_data = self.translate_batch(batch)
                 translations = self.from_batch(batch_data)
-
                 for trans in translations:
+
                     pred, gold, src = trans
                     pred_str = pred.replace('[unused0]', '').replace('[unused3]', '').replace('[PAD]', '').replace('[unused1]', '').replace(r' +', ' ').replace(' [unused2] ', '<q>').replace('[unused2]', '').strip()
                     gold_str = gold.strip()
@@ -243,6 +246,9 @@ class Translator(object):
             ext_scores = ((labels.float() + 0.1) / 1.3) * mask_cls.float()
         else:
             ext_scores, _, sent_vec = self.model.extractor(src, segs, clss, mask_src, mask_cls)
+
+        print("ext_scores : ", ext_scores.size())
+        print(ext_scores)
 
         src_features = self.model.abstractor.bert(src, segs, mask_src)
         dec_states = self.model.abstractor.decoder.init_decoder_state(src, src_features, with_cache=True)

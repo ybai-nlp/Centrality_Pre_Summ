@@ -60,12 +60,12 @@ def build_optim_bert(args, model, checkpoint):
                 " but optimizer state is empty")
 
     else:
-        print(args.optim)
-        print(args.lr_bert)
-        print(args.max_grad_norm)
-        print(args.beta1)
-        print(args.beta2)
-        print(args.warmup_steps_bert)
+        # print(args.optim)
+        # print(args.lr_bert)
+        # print(args.max_grad_norm)
+        # print(args.beta1)
+        # print(args.beta2)
+        # print(args.warmup_steps_bert)
         optim = Optimizer(
             args.optim, args.lr_bert, args.max_grad_norm,
             beta1=args.beta1, beta2=args.beta2,
@@ -871,12 +871,18 @@ class HybridSummarizer(nn.Module):
             # _, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
             # print("labels", labels.size())
             # print(labels)
-            ext_scores = ((labels.float() + 0.1) / 1.3) * mask_cls.float()
+            # ext_scores = 0 * mask_cls.float()
+            ext_scores = ((labels.float(), + 0.1) / 1.3) * mask_cls.float()
             # print("ext_scores, ", ext_scores.size())
             # print(ext_scores)
         else:
-            ext_scores, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
+            # w
+            with torch.no_grad():
+                ext_scores, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
+            # ext_scores = ext_scores * 0.1
             # print(ext_scores)
+        # print("ext_scores: ", ext_scores.size())
+        # print(ext_scores)
         # exit()
 
         # batchsize * (tgt_len - 1) * hidden_size
@@ -1063,17 +1069,6 @@ class HybridSummarizer(nn.Module):
         #
         # exit()
         # attn_dist = attn_dist.unsqueeze(1)
-
-
-
-
-
-
-
-
-
-
-
         '''
         # exit()
 
@@ -1131,12 +1126,6 @@ class HybridSummarizer(nn.Module):
         # print(g)
         # exit()
         '''
-
-
-
-
-
-
         # print("attn_dist ", attn_dist.size())
         # print("g = ", g.size())
         # print("xid = ", xids.size())
@@ -1150,7 +1139,6 @@ class HybridSummarizer(nn.Module):
         # print(attn_dist)
         
         # attn_dist = attn_dist * attn_pad_mask
-
         ext_dist = Variable(torch.zeros(tgt.size(0), tgt.size(1) - 1, self.abstractor.bert.model.config.vocab_size).to(self.device))
         # ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * mask_tgt.unsqueeze(2)[:,:-1,:].float() * attn_pad_mask) * mask_tgt.unsqueeze(2)[:,:-1,:].float()
         ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * mask_tgt.unsqueeze(2)[:,:-1,:].float() * attn_dist) * mask_tgt.unsqueeze(2)[:,:-1,:].float()
@@ -1223,7 +1211,6 @@ class HybridSummarizer(nn.Module):
         # print("context vectors ", context_vector.size())
         # print(context_vector)
         # exit()
-
         '''
         W matrix1: content,不涉及句子之间的关系，可以放在外边的循环里 = c^1_i
         W matrix2: similarity, sent_1^T * W_2 * sent_2 = c^2_ij
@@ -1239,4 +1226,9 @@ class HybridSummarizer(nn.Module):
         # print("g",g.size())
         # print(g)
         # return decoder_outputs, None
+
+
+        # print("ext_scores", ext_scores.size())
+        # print(ext_scores)
+
         return decoder_outputs, None, (ext_vocab_prob, g)

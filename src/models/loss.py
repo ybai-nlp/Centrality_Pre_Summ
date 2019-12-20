@@ -274,7 +274,7 @@ class PairwiseLoss(nn.Module):
 
 
         # exit()
-        pairwise_output = nn.functional.sigmoid((outputt - output_)) * mask
+        pairwise_output = nn.functional.sigmoid(5 * (outputt - output_)) * mask
 
 
         # print("pairwise_output", pairwise_output.size())
@@ -296,14 +296,21 @@ class PairwiseLoss(nn.Module):
                     if target[i][j] > target[i][k]:
                         target1[i][j][k] = 1
                     elif target[i][j] < target[i][k]:
-                        target1[i][j][k] = -1
-                    else:
                         target1[i][j][k] = 0
+                    else:
+                        target1[i][j][k] = 0.5
         target1 = target1 * mask
+        half_mask = torch.ne(target1, 0.5).float()
         # print("target", target1.size())
         # print(target1)
-
-
+        # print("eq ", torch.ne(target1, 0.5))
+        # exit()
+        pairwise_output = pairwise_output * half_mask
+        target1 = target1 * half_mask
+        # print("pairwise_output", pairwise_output.size())
+        # print(pairwise_output)
+        # print("target", target1.size())
+        # print(target1)
         loss = self.loss(pairwise_output, target1) * mask
 
         # loss = -0.5 * ((1 - target1) * torch.log((1 - pairwise_output).abs_()) + (1 + target1) * torch.log((1 + pairwise_output).abs_()))
