@@ -11,7 +11,8 @@ from tensorboardX import SummaryWriter
 
 from others.utils import rouge_results_to_str, test_rouge, tile
 from translate.beam import GNMTGlobalScorer
-
+import torch.nn.functional as F
+from torch.autograd import Variable
 
 def build_predictor(args, tokenizer, symbols, model, logger=None):
     scorer = GNMTGlobalScorer(args.alpha,length_penalty='wu')
@@ -23,6 +24,8 @@ def build_predictor(args, tokenizer, symbols, model, logger=None):
 class Translator(object):
     """
     Uses a model to translate a batch of sentences.
+
+
     Args:
        model (:obj:`onmt.modules.NMTModel`):
           NMT model to use for translation
@@ -51,7 +54,7 @@ class Translator(object):
 
         self.args = args
         self.model = model
-        self.generator = self.model.generator
+        self.generator = self.model.abstractor.generator
         self.vocab = vocab
         self.symbols = symbols
         self.start_token = symbols['BOS']
@@ -139,15 +142,18 @@ class Translator(object):
         # pred_results, gold_results = [], []
         ct = 0
         with torch.no_grad():
+            pos = 0
             for batch in data_iter:
+                print("now is the batch ", pos, end='\r')
+                pos += 1
                 if(self.args.recall_eval):
                     gold_tgt_len = batch.tgt.size(1)
                     self.min_length = gold_tgt_len + 20
                     self.max_length = gold_tgt_len + 60
                 batch_data = self.translate_batch(batch)
                 translations = self.from_batch(batch_data)
-
                 for trans in translations:
+
                     pred, gold, src = trans
                     pred_str = pred.replace('[unused0]', '').replace('[unused3]', '').replace('[PAD]', '').replace('[unused1]', '').replace(r' +', ' ').replace(' [unused2] ', '<q>').replace('[unused2]', '').strip()
                     gold_str = gold.strip()
@@ -198,11 +204,14 @@ class Translator(object):
     def translate_batch(self, batch, fast=False):
         """
         Translate a batch of sentences.
+
         Mostly a wrapper around :obj:`Beam`.
+
         Args:
            batch (:obj:`Batch`): a batch from a dataset object
            data (:obj:`Dataset`): the dataset object
            fast (bool): enables fast beam search (may not support all features)
+
         Todo:
            Shouldn't need the original dataset.
         """
@@ -226,15 +235,37 @@ class Translator(object):
         src = batch.src
         segs = batch.segs
         mask_src = batch.mask_src
+        clss = batch.clss
+        mask_cls = batch.mask_cls
+        # print("src ", src.size())
+        # print(src)
+        # print("mask src", mask_src.size())
+        # print(mask_src)
+        if self.args.oracle:
+            labels = batch.src_sent_labels
+            ext_scores = ((labels.float() + 0.1) / 1.3) * mask_cls.float()
+        else:
+            ext_scores, _, sent_vec = self.model.extractor(src, segs, clss, mask_src, mask_cls)
 
-        src_features = self.model.bert(src, segs, mask_src)
-        dec_states = self.model.decoder.init_decoder_state(src, src_features, with_cache=True)
+        # print("ext_scores : ", ext_scores.size())
+        # print(ext_scores)
+
+        src_features = self.model.abstractor.bert(src, segs, mask_src)
+        dec_states = self.model.abstractor.decoder.init_decoder_state(src, src_features, with_cache=True)
+
+
         device = src_features.device
 
         # Tile states and memory beam_size times.
         dec_states.map_batch_fn(
             lambda state, dim: tile(state, beam_size, dim=dim))
         src_features = tile(src_features, beam_size, dim=0)
+        ext_scores = tile(ext_scores, beam_size, dim=0)
+        mask_src = tile(mask_src, beam_size, dim=0)
+        mask_cls = tile(mask_cls, beam_size, dim=0)
+        clss = tile(clss, beam_size, dim=0)
+        src = tile(src, beam_size, dim=0)
+
         batch_offset = torch.arange(
             batch_size, dtype=torch.long, device=device)
         beam_offset = torch.arange(
@@ -266,14 +297,76 @@ class Translator(object):
         for step in range(max_length):
             decoder_input = alive_seq[:, -1].view(1, -1)
 
+            # print("alive seq ", alive_seq.size())
+            # print(alive_seq)
+            # print("decoder_input ", decoder_input.size())
+            # print(decoder_input)
+
             # Decoder forward.
             decoder_input = decoder_input.transpose(0,1)
+            encoder_state = src_features
 
-            dec_out, dec_states = self.model.decoder(decoder_input, src_features, dec_states,
-                                                     step=step)
+            decoder_outputs, dec_states, y_emb = self.model.abstractor.decoder(decoder_input, src_features, dec_states,
+                                                     step=step, need_y_emb=True)
+            # print("encoder_state ", encoder_state.size())
+            # print(encoder_state)
+            # print("decoder_outputs", decoder_outputs.size())
+            # print(decoder_outputs)
+            # print("y_emb", y_emb.size())
+            # print(y_emb)
+
+            src_pad_mask = (1 - mask_src).unsqueeze(1)
+            # print("src_pad_mask ", src_pad_mask.size())
+            # print(src_pad_mask)
+            context_vector, attn_dist = self.model.context_attn(src_features, src_features, decoder_outputs,
+                                                          mask=src_pad_mask,
+                                                          # layer_cache=layer_cache,
+                                                          type="context")
+            # print("context vector ", context_vector.size())
+            # print(context_vector)
+            # print("attn_dist 0", attn_dist.size())
+            # print(attn_dist)
+            g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.model.v, self.model.bv))
+            xids = src.unsqueeze(0).transpose(0, 1)
+
+            # xids = xids * mask_tgt.unsqueeze(2)[:, :-1, :].long()
+
+            len0 = src.size(1)
+            len0 = torch.Tensor([[len0]]).repeat(src.size(0), 1).long().to('cuda')
+            clss_up = torch.cat((clss, len0), dim=1)
+            sent_len = (clss_up[:, 1:] - clss) * mask_cls.long()
+            for i in range(mask_cls.size(0)):
+                for j in range(mask_cls.size(1)):
+                    if sent_len[i][j] < 0:
+                        sent_len[i][j] += src.size(1)
+            # print("sent_len ", sent_len.size())
+            # print(sent_len)
+            ext_scores_0 = ext_scores.unsqueeze(1).transpose(1, 2).repeat(1, 1, mask_src.size(1))
+            for i in range(mask_cls.size(0)):
+                tmp_vec = ext_scores_0[i, 0, :sent_len[i][0].int()]
+
+                for j in range(1, mask_cls.size(1)):
+                    tmp_vec = torch.cat((tmp_vec, ext_scores_0[i, j, :sent_len[i][j].int()]), dim=0)
+                if i == 0:
+                    ext_scores_new = tmp_vec.unsqueeze(0)
+                else:
+                    ext_scores_new = torch.cat((ext_scores_new, tmp_vec.unsqueeze(0)), dim=0)
+            # print("ext_score_new", ext_scores_new.size())
+            # print(ext_scores_new)
+            ext_scores_new = ext_scores_new * mask_src.float()
+            attn_dist = attn_dist * (ext_scores_new + 1).unsqueeze(1)
+
+            # print("attn_dist 1", attn_dist.size())
+            # print(attn_dist)
+
+            ext_dist = Variable(torch.zeros(src.size(0), 1, self.model.abstractor.bert.model.config.vocab_size).to('cuda'))
+            # ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * mask_tgt.unsqueeze(2)[:,:-1,:].float() * attn_pad_mask) * mask_tgt.unsqueeze(2)[:,:-1,:].float()
+            ext_vocab_prob = ext_dist.scatter_add(2, xids, (1 - g) * attn_dist)
+
 
             # Generator forward.
-            log_probs = self.generator.forward(dec_out.transpose(0,1).squeeze(0))
+            softmax_probs = self.model.abstractor.generator.forward(decoder_outputs.transpose(0,1).squeeze(0)) * g.transpose(0,1).squeeze(0) + ext_vocab_prob.transpose(0,1).squeeze(0)
+            log_probs = torch.log(softmax_probs)
             vocab_size = log_probs.size(-1)
 
             if step < min_length:
@@ -365,6 +458,15 @@ class Translator(object):
             # Reorder states.
             select_indices = batch_index.view(-1)
             src_features = src_features.index_select(0, select_indices)
+            ext_scores = ext_scores.index_select(0, select_indices)
+            mask_src =  mask_src.index_select(0, select_indices)
+            mask_cls =  mask_cls.index_select(0, select_indices)
+            clss = clss.index_select(0, select_indices)
+            src = src.index_select(0, select_indices)
+
+
+
+
             dec_states.map_batch_fn(
                 lambda state, dim: state.index_select(dim, select_indices))
 
@@ -374,14 +476,17 @@ class Translator(object):
 class Translation(object):
     """
     Container for a translated sentence.
+
     Attributes:
         src (`LongTensor`): src word ids
         src_raw ([str]): raw src words
+
         pred_sents ([[str]]): words from the n-best translations
         pred_scores ([[float]]): log-probs of n-best translations
         attns ([`FloatTensor`]) : attention dist for each translation
         gold_sent ([str]): words from gold translation
         gold_score ([float]): log-prob of gold translation
+
     """
 
     def __init__(self, fname, src, src_raw, pred_sents,

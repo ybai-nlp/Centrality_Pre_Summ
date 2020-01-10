@@ -79,6 +79,7 @@ def build_optim_bert(args, model, checkpoint):
     #     print(each)
     # params = [(n, p) for n, p in list(model.named_parameters()) if n.startswith('bert.model')]
     params = [(n, p) for n, p in list(model.named_parameters()) if ('bert.model' in n) ]
+    # print("params bert")
     # print(params)
     optim.set_parameters(params)
     # exit()
@@ -114,6 +115,8 @@ def build_optim_dec(args, model, checkpoint):
     # params = [(n, p) for n, p in list(model.named_parameters()) if not n.startswith('bert.model')]
     params = [(n, p) for n, p in list(model.named_parameters()) if not ('bert.model' in n)]
     # params = [(n, p) for n, p in list(model.named_parameters()) if not (n.startswith('bert.model') or ('abstractor' in n))]
+    # print("params decoder: ")
+    # print(params)
     # for each in model.named_parameters():
     #     print(each)
     # exit()
@@ -675,6 +678,7 @@ class ExtSummarizer(nn.Module):
         # 先过bert层
         # 第一维为batch_size
 
+        # [batch * max_length]
         top_vec = self.bert(src, segs, mask_src)
         # print("top vec = ", top_vec.size())
         # print(top_vec)
@@ -818,6 +822,11 @@ class HybridSummarizer(nn.Module):
         self.v = nn.Parameter(torch.Tensor(1, self.args.dec_hidden_size * 3))
         self.bv = nn.Parameter(torch.Tensor(1))
         self.attn_lin = nn.Linear(self.args.dec_hidden_size, self.args.dec_hidden_size)
+        if self.args.hybrid_loss:
+            self.ext_loss_fun = torch.nn.BCELoss(reduction='none')
+        if self.args.hybrid_connector:
+            self.p_sen = nn.Linear(self.args.dec_hidden_size, 1)
+
 
 
         # bert 测试的时候直接全部load
@@ -836,6 +845,16 @@ class HybridSummarizer(nn.Module):
 
             nn.init.xavier_uniform_(self.v)
             nn.init.constant_(self.bv, 0)
+            if self.args.hybrid_connector:
+                for module in self.p_sen.modules():
+                    # print(each)
+                    if isinstance(module, (nn.Linear, nn.Embedding)):
+                        module.weight.data.normal_(mean=0.0, std=0.02)
+                    elif isinstance(module, nn.LayerNorm):
+                        module.bias.data.zero_()
+                        module.weight.data.fill_(1.0)
+                    if isinstance(module, nn.Linear) and module.bias is not None:
+                        module.bias.data.zero_()
 
             for module in self.context_attn.modules():
                 # print(each)
@@ -867,27 +886,45 @@ class HybridSummarizer(nn.Module):
         # print("mask_cls = ", mask_cls.size())
         # print(mask_cls)
 
-        if labels is not None:
+        if labels is not None and self.args.oracle:
             # _, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
             # print("labels", labels.size())
             # print(labels)
             # ext_scores = 0 * mask_cls.float()
             ext_scores = ((labels.float(), + 0.1) / 1.3) * mask_cls.float()
+            # print(1)
+            # exit()
+
             # print("ext_scores, ", ext_scores.size())
             # print(ext_scores)
         else:
             # w
-            with torch.no_grad():
+            if labels is None:
+                with torch.no_grad():
+                    ext_scores, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
+                # print(2)
+                # exit()
+            else:
                 ext_scores, _, sent_vec = self.extractor(src, segs, clss, mask_src, mask_cls)
+                ext_loss = self.ext_loss_fun(ext_scores, labels.float())
+                ext_loss = ext_loss * mask_cls.float()
+
+                # print("ext_loss = ", ext_loss.size())
+                # print(ext_loss)
+                # exit()
+
+
             # ext_scores = ext_scores * 0.1
             # print(ext_scores)
-        # print("ext_scores: ", ext_scores.size())
+        # print("ext_scores_init: ", ext_scores.size())
         # print(ext_scores)
         # exit()
 
         # batchsize * (tgt_len - 1) * hidden_size
         # 这个隐状态输出出去之后，回到train_abstractive.py的loss计算函数中，然后到loss.py的计算loss函数中，过一个generator的ff层，投影成vocab_size大小的概率分布
         decoder_outputs, encoder_state, y_emb = self.abstractor(src, tgt, segs, clss, mask_src, mask_tgt, mask_cls)
+        # print("decoder_outputs", decoder_outputs.size())
+        # print(decoder_outputs)
 
         # print("encoder_state ", encoder_state.size())
         # print(encoder_state)
@@ -921,39 +958,73 @@ class HybridSummarizer(nn.Module):
         # print("sent_vec ", sent_vec.size())
         # print("ext_scores", ext_scores.size())
         # print(ext_scores)
-        '''
-        sorted_scores, sorted_scores_idx = torch.sort(ext_scores, dim=1, descending=True)
-        print("sort example idx", sorted_scores_idx.size())
-        print(sorted_scores_idx)
-        print("sort example", sorted_scores.size())
-        print(sorted_scores)
-        # print("sent_vec ", sent_vec.size())
-        # print(sent_vec)
+        if self.args.hybrid_connector:
+            sorted_scores, sorted_scores_idx = torch.sort(ext_scores, dim=1, descending=True)
+            # print("sort example idx", sorted_scores_idx.size())
+            # print(sorted_scores_idx)
+            # print("sort example", sorted_scores.size())
+            # print(sorted_scores)
+            # print("sent_vec ", sent_vec.size())
+            # print(sent_vec)
 
-        select_num = min(3, mask_cls.size(1))
-        # print("select num = ", mask_cls.float())
 
-        selected_vec = torch.zeros(sent_vec.size(0), select_num ,sent_vec.size(2)).to('cuda')
-        print("selected_vec ", selected_vec.size())
-        print(selected_vec)
-        # exit()
-        for i, batch in enumerate(selected_vec):
-            selected = sent_vec[i].index_select(dim=0, index=sorted_scores_idx[i][:select_num])
-            print("selected ", selected.size())
-            print(selected)
-            print("ext_scores",ext_scores[i][:select_num].unsqueeze(1).size())
-            print(ext_scores[i][:select_num].unsqueeze(1))
-            selected_vec[i] += selected * ext_scores[i][:select_num].unsqueeze(1)
-            print("selected_vec[i] ", selected_vec[i].size())
-            print(selected_vec[i])
+            # 如果只取三个就用这个
+            select_num = min(3, mask_cls.size(1))
+            # 否则用这个
+            # select_num = mask_cls.size(1)
+
+            # 每个句子单独算一个值出来。
+            # print("tuple")
+            # print(tuple(sorted_scores_idx[0][:select_num]))
+            # print(sorted_scores[0][:select_num].unsqueeze(0).transpose(0,1))
+            # print(sent_vec[0, tuple(sorted_scores_idx[0][:select_num])])
+            # 这里有一堆东西，但是是把选出的前三个句子和对应评分加权，方便下边求和。
+            selected_sent_vec = tuple([(sorted_scores[i][:select_num].unsqueeze(0).transpose(0,1) * sent_vec[i,tuple(sorted_scores_idx[i][:select_num])]).unsqueeze(0) for i, each in enumerate(sorted_scores_idx)])
+            # selected_sent_vec = sent_vec.index_select(dim=1, index=sorted_scores_idx][:select_num]) for i, each in enumerate(sorted_scores_idx)
+            # selected_sent_vec =
+            selected_sent_vec = torch.cat(selected_sent_vec, dim=0)
+
+            # print("selected sent vec 1,进行加权求和之前", len(selected_sent_vec))
+            # print(selected_sent_vec)
+
+            selected_sent_vec = selected_sent_vec.sum(dim=1)
+
+            # print("selected sent vec", len(selected_sent_vec))
+            # print(selected_sent_vec)
+            E_sel = self.p_sen(selected_sent_vec)
+            # print("e_sel = ", E_sel.size())
+            # print(E_sel)
+            # print("")
+            # print("ext scores ", ext_scores.size())
+            # print(ext_scores)
+            ext_scores = ext_scores * E_sel
+            # print(E_sel *
+            # print("final ext scores ", ext_scores.size())
+            # print(ext_scores)
             # exit()
 
-        # selected_vec = sent_vec.index_select(dim=0, index = sorted_scores_idx[:, :3])
-
-        # print("before selected_vec_sum",selected_vec.sum(dim=1))
-        E_sel = selected_vec.sum(dim=1).repeat(1, decoder_outputs.size(1))
-        E_sel = E_sel.reshape(decoder_outputs.size())
-        '''
+            # # print("select num = ", mask_cls.float())
+            #
+            # selected_vec = torch.zeros(sent_vec.size(0), select_num ,sent_vec.size(2)).to('cuda')
+            # print("selected_vec ", selected_vec.size())
+            # print(selected_vec)
+            # # exit()
+            # for i, batch in enumerate(selected_vec):
+            #     selected = sent_vec[i].index_select(dim=0, index=sorted_scores_idx[i][:select_num])
+            #     print("selected ", selected.size())
+            #     print(selected)
+            #     print("ext_scores",ext_scores[i][:select_num].unsqueeze(1).size())
+            #     print(ext_scores[i][:select_num].unsqueeze(1))
+            #     selected_vec[i] += selected * ext_scores[i][:select_num].unsqueeze(1)
+            #     print("selected_vec[i] ", selected_vec[i].size())
+            #     print(selected_vec[i])
+            #     # exit()
+            #
+            # # selected_vec = sent_vec.index_select(dim=0, index = sorted_scores_idx[:, :3])
+            #
+            # # print("before selected_vec_sum",selected_vec.sum(dim=1))
+            # E_sel = selected_vec.sum(dim=1).repeat(1, decoder_outputs.size(1))
+            # E_sel = E_sel.reshape(decoder_outputs.size())
 
         # print("selected_vec_sum = ", E_sel.size())
         # print(E_sel)
@@ -977,11 +1048,106 @@ class HybridSummarizer(nn.Module):
         # print("y_emb", y_emb)
         # print("context vector", context_vector)
         # g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv)) * mask_tgt.unsqueeze(2)[:,:-1,:].float()
+
+        if torch.isnan(decoder_outputs[0][0][0]):
+            print("ops, decoder_outputs!")
+            print("src = ", src.size())
+            print(src)
+            print("tgt = ", tgt.size())
+            print(tgt)
+            # # # segs是每个词属于哪句话
+            print("segs = ", segs.size())
+            print(segs)
+            # # clss 是每个句子的起点位置
+            print("clss = ", clss.size())
+            print(clss)
+            print("mask_src = ", mask_src.size())
+            print(mask_src)
+            print("mask_cls = ", mask_cls.size())
+            print(mask_cls)
+            print("decoder_outputs ", decoder_outputs.size())
+            print(decoder_outputs)
+            print("y_emb ", y_emb)
+            print(y_emb)
+            print("context_vector ", context_vector.size())
+            print(context_vector)
+            exit()
+
+        if torch.isnan(y_emb[0][0][0]):
+            print("ops, yemb!")
+            print("src = ", src.size())
+            print(src)
+            print("tgt = ", tgt.size())
+            print(tgt)
+            # # # segs是每个词属于哪句话
+            print("segs = ", segs.size())
+            print(segs)
+            # # clss 是每个句子的起点位置
+            print("clss = ", clss.size())
+            print(clss)
+            print("mask_src = ", mask_src.size())
+            print(mask_src)
+            print("mask_cls = ", mask_cls.size())
+            print(mask_cls)
+            print("decoder_outputs ", decoder_outputs.size())
+            print(decoder_outputs)
+            print("y_emb ", y_emb)
+            print(y_emb)
+            print("context_vector ", context_vector.size())
+            print(context_vector)
+            exit()
+
+        if torch.isnan(context_vector[0][0][0]):
+            print("ops, context_vector!")
+            print("src = ", src.size())
+            print(src)
+            print("tgt = ", tgt.size())
+            print(tgt)
+            # # # segs是每个词属于哪句话
+            print("segs = ", segs.size())
+            print(segs)
+            # # clss 是每个句子的起点位置
+            print("clss = ", clss.size())
+            print(clss)
+            print("mask_src = ", mask_src.size())
+            print(mask_src)
+            print("mask_cls = ", mask_cls.size())
+            print(mask_cls)
+            print("decoder_outputs ", decoder_outputs.size())
+            print(decoder_outputs)
+            print("y_emb ", y_emb)
+            print(y_emb)
+            print("context_vector ", context_vector.size())
+            print(context_vector)
+            exit()
+
         g = torch.sigmoid(F.linear(torch.cat([decoder_outputs, y_emb, context_vector], -1), self.v, self.bv))
         # print("g ", g.size())
         # print(g)
         if torch.isnan(g[0][0]):
-            print("ops!")
+            print("ops!, g")
+            print("src = ", src.size())
+            print(src)
+            print("tgt = ", tgt.size())
+            print(tgt)
+            # # # segs是每个词属于哪句话
+            print("segs = ", segs.size())
+            print(segs)
+            # # clss 是每个句子的起点位置
+            print("clss = ", clss.size())
+            print(clss)
+            print("mask_src = ", mask_src.size())
+            print(mask_src)
+            print("mask_cls = ", mask_cls.size())
+            print(mask_cls)
+            print("decoder_outputs ", decoder_outputs.size())
+            print(decoder_outputs)
+            print("y_emb ", y_emb)
+            print(y_emb)
+            print("context_vector ", context_vector.size())
+            print(context_vector)
+            print("g ", g.size())
+            print(g)
             exit()
 
 
@@ -1065,7 +1231,13 @@ class HybridSummarizer(nn.Module):
         # print("ext_scores new2 ", ext_scores_new.size())
         # print(ext_scores_new)
         attn_dist = attn_dist * (ext_scores_new + 1).unsqueeze(1)
+        # print("sum = ", attn_dist.sum(dim=2).size())
+        # print(attn_dist.sum(dim=2).unsqueeze(2))
+        # 高老师最后的加权求和公式。
+        attn_dist = attn_dist / attn_dist.sum(dim=2).unsqueeze(2)
+        # print("attn_dist1 ", attn_dist.size())
         # print(attn_dist)
+        # exit()
         #
         # exit()
         # attn_dist = attn_dist.unsqueeze(1)
@@ -1231,4 +1403,7 @@ class HybridSummarizer(nn.Module):
         # print("ext_scores", ext_scores.size())
         # print(ext_scores)
 
-        return decoder_outputs, None, (ext_vocab_prob, g)
+        if self.args.hybrid_loss:
+            return decoder_outputs, None, (ext_vocab_prob, g, ext_loss)
+        else:
+            return decoder_outputs, None, (ext_vocab_prob, g)

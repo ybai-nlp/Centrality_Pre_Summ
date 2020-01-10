@@ -18,7 +18,7 @@ from models.data_loader import load_dataset
 from models.model_builder import ExtSummarizer, HybridSummarizer
 from models.loss import abs_loss
 from models.trainer import build_trainer
-from models.predictor import build_predictor
+from models.predictor_copy import build_predictor
 from others.logging import logger, init_logger
 model_flags = ['hidden_size', 'ff_size', 'heads', 'inter_layers', 'encoder', 'ff_actv', 'use_interval', 'rnn_size']
 # symbols = {'BOS': tokenizer.vocab['[unused0]'], 'EOS': tokenizer.vocab['[unused1]'],

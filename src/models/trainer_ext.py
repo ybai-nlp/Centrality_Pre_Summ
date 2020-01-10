@@ -103,6 +103,7 @@ class Trainer(object):
         self.report_manager = report_manager
 
         if args.pairwise:
+            print("using pairwise loss !")
             self.loss = PairwiseLoss()
         else:
             self.loss = torch.nn.BCELoss(reduction='none')
@@ -249,6 +250,7 @@ class Trainer(object):
 
         can_path = '%s_step%d.candidate' % (self.args.result_path, step)
         gold_path = '%s_step%d.gold' % (self.args.result_path, step)
+        # dataset = []
         with open(can_path, 'w') as save_pred:
             with open(gold_path, 'w') as save_gold:
                 with torch.no_grad():
@@ -270,6 +272,13 @@ class Trainer(object):
                                             range(batch.batch_size)]
                         else:
                             sent_scores, mask = self.model(src, segs, clss, mask, mask_cls)
+                            # for i in range(0, sent_scores.size(0)):
+                            #     sent_scores[i]
+
+
+                            # b_data_dict = {"src": src_subtoken_idxs, "tgt": tgt_subtoken_idxs,
+                            #                "src_sent_labels": sent_labels, "segs": segments_ids, 'clss': cls_ids,
+                            #                'src_txt': src_txt, "tgt_txt": tgt_txt}
 
                             if self.args.pairwise:
                                 loss = self.loss(sent_scores, labels.float(), mask)

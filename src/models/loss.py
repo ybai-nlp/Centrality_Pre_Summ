@@ -95,8 +95,19 @@ class LossComputeBase(nn.Module):
         shard_state = self._make_shard_state(batch, output, copy_params)
         output = shard_state['output']
         target = shard_state['target']
-        # copy_params = (shard_state['copy_params[0]'], shard_state['copy_params[1]'])
-        _, batch_stats = self._compute_loss(batch, output, target, g=copy_params[1], ext_dist=copy_params[0])
+        # if len(shard_state) > 2:
+        #     copy_params_new = (shard_state['copy_params[0]'], shard_state['copy_params[1]'], shard_state['copy_params[2]'])
+        # else:
+        copy_params_new = (shard_state['copy_params[0]'], shard_state['copy_params[1]'])
+
+        if copy_params is not None:
+            if len(copy_params) > 2:
+                _, batch_stats = self._compute_loss(batch, output, target, g=copy_params_new[1], ext_dist=copy_params_new[0], ext_loss=copy_params_new[2])
+            else:
+                _, batch_stats = self._compute_loss(batch, output, target, g=copy_params_new[1], ext_dist=copy_params_new[0])
+        else:
+            _, batch_stats = self._compute_loss(batch, output, target)
+
 
         return batch_stats
 
@@ -134,16 +145,29 @@ class LossComputeBase(nn.Module):
         # print("batch = ")
         # print(batch)
         shard_state = self._make_shard_state(batch, output, copy_params)
+        # print("keys")
+        # print(shard_state.keys())
         for shard in shards(shard_state, shard_size):
             # print("shard")
             # print(shard)
             output = shard['output']
             target = shard['target']
-            g = shard['copy_params[1]']
-            ext_dist = shard['copy_params[0]']
-            # exit()
-            # copy_params = (shard['copy_params[0]'], shard['copy_params[1]'])
-            loss, stats = self._compute_loss(batch, output, target, g, ext_dist)
+            if copy_params is not None:
+                g = shard['copy_params[1]']
+                ext_dist = shard['copy_params[0]']
+                if len(shard) > 2:
+                    ext_loss = shard['copy_params[2]']
+                # print("ext_loss", ext_loss.size())
+                # else:
+                #     ext_loss = None
+                # exit()
+                # copy_params = (shard['copy_params[0]'], shard['copy_params[1]'])
+                if len(copy_params)>2:
+                    loss, stats = self._compute_loss(batch, output, target, g, ext_dist, ext_loss)
+                else:
+                    loss, stats = self._compute_loss(batch, output, target, g, ext_dist)
+            else:
+                loss, stats = self._compute_loss(batch, output, target)
             # print("copy_params: ")
             # print(copy_params[0].size())
             # print(copy_params[0])
@@ -151,7 +175,12 @@ class LossComputeBase(nn.Module):
             # print(copy_params[1])
             # print("111111111111")
             # loss.div(float(normalization)).backward(retain_graph=True)
-            loss.div(float(normalization)).backward()
+            # print("normalization = ", normalization)
+            # print('copy2 = ', ext_loss.size())
+            (loss.div(float(normalization)) + ext_loss.mean() / 2).backward()
+            # print("loss1 ", loss.div(float(normalization)))
+            # print("loss2 ", ext_loss.mean())
+            # exit()
             batch_stats.update(stats)
 
         return batch_stats
@@ -342,23 +371,51 @@ class NMTLossCompute(LossComputeBase):
             )
 
     def _make_shard_state(self, batch, output, copy_params):
-        return {
-            "output": output,
-            "target": batch.tgt[:,1:],
-            "copy_params[0]": copy_params[0],
-            "copy_params[1]": copy_params[1],
-        }
+        if copy_params is not None:
+            # print("len(copy params)")
+            # print(len(copy_params))
+            # exit()
+            if len(copy_params) > 2:
+                return {
+                    "output": output,
+                    "target": batch.tgt[:,1:],
+                    "copy_params[0]": copy_params[0],
+                    "copy_params[1]": copy_params[1],
+                    "copy_params[2]": copy_params[2],
+                }
+            else:
+                return {
+                    "output": output,
+                    "target": batch.tgt[:,1:],
+                    "copy_params[0]": copy_params[0],
+                    "copy_params[1]": copy_params[1],
+                }
+        else:
+            return {
+                "output": output,
+                "target": batch.tgt[:,1:],
+            }
 
-    def _compute_loss(self, batch, output, target, g=None, ext_dist=None):
+    def _compute_loss(self, batch, output, target, g=None, ext_dist=None, ext_loss = None):
+        # print("output", output.size())
+        # print(output)
         bottled_output = self._bottle(output)
         scores = self.generator(bottled_output)
-        scores = scores * self._bottle(g) + self._bottle(ext_dist)
+        if g is not None:
+            scores = scores * self._bottle(g) + self._bottle(ext_dist)
         scores = torch.log(scores)
         gtruth =target.contiguous().view(-1)
 
-        loss = self.criterion(scores, gtruth)
 
-        stats = self._stats(loss.clone(), scores, gtruth)
+        loss = self.criterion(scores, gtruth)
+        # print("loss = ", loss.size())
+        # print(loss)
+        # print("ext_loss = ", ext_loss.size())
+        # print(ext_loss)
+        if ext_loss is not None:
+            stats = self._stats(loss.clone() + ext_loss.mean().clone(), scores, gtruth)
+        else:
+            stats = self._stats(loss.clone(), scores, gtruth)
 
         return loss, stats
 

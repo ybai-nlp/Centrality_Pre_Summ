@@ -124,6 +124,10 @@ if __name__ == '__main__':
         action='store_true',
         help='use hybrid oracle to train hybrid model')
     parser.add_argument(
+        '--hybrid_loss',
+        action='store_true',
+        help='use hybrid loss to train hybrid model')
+    parser.add_argument(
         '--self_compare',
         action='store_true',
         help='use hybrid oracle to train hybrid model')
@@ -131,6 +135,10 @@ if __name__ == '__main__':
         '--cal_square',
         action='store_true',
         help='use hybrid oracle to train hybrid model')
+    parser.add_argument(
+        '--hybrid_connector',
+        action='store_true',
+        help='use hybrid connector to train hybrid model')
     # parser.add_argument(
     #     '--threshold_control',
     #     action='store_true',
