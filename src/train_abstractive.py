@@ -236,6 +236,7 @@ def test_text_abs(args, device_id, pt, step):
     logger.info('Loading checkpoint from %s' % test_from)
 
     checkpoint = torch.load(test_from, map_location=lambda storage, loc: storage)
+
     opt = vars(checkpoint['opt'])
     for k in opt.keys():
         if (k in model_flags):

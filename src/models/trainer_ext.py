@@ -156,7 +156,12 @@ class Trainer(object):
                     # print(batch.batch_size)
 
                     true_batchs.append(batch)
+
+
                     normalization += batch.batch_size
+                    # num_sents = batch.src_sent_labels[:, :].ne(self.loss.padding_idx).sum()
+                    # normalization += num_sents
+
                     accum += 1
                     if accum == self.grad_accum_count:
                         reduce_counter += 1
@@ -291,6 +296,15 @@ class Trainer(object):
 
                             sent_scores = sent_scores + mask.float()
                             sent_scores = sent_scores.cpu().data.numpy()
+
+                            # selected_ids = []
+                            # for i in range(src.size(0)):
+                            #     index = np.argmax(sent_scores[i], axis=1) + mask.float().cpu().data.numpy()
+                            #     score = np.max(sent_scores[i], axis=1) + mask.float().cpu().data.numpy()
+                            #     a = [(index[j], score[j], -j) for j in range(len(index))]
+                            #     a = sorted(a, reverse=True)
+                            #     ids = [-each[2] for each in a]
+                            #     selected_ids.append(ids)
                             selected_ids = np.argsort(-sent_scores, 1)
                         # selected_ids = np.sort(selected_ids,1)
                         for i, idx in enumerate(selected_ids):

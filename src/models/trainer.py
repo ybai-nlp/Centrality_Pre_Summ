@@ -250,6 +250,7 @@ class Trainer(object):
             tgt = batch.tgt
             segs = batch.segs
             clss = batch.clss
+            # tgt_txt = batch.tgt_str
             mask_src = batch.mask_src
             mask_tgt = batch.mask_tgt
             mask_cls = batch.mask_cls
@@ -260,6 +261,7 @@ class Trainer(object):
                     outputs, scores, copy_params = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls, labels)
                 else:
                     outputs, scores, copy_params = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls)
+
                 # print("outputs", outputs.size())
                 # print("scores", scores.size())
                 # print("ext_outputs", copy_params[0].size())
@@ -277,6 +279,12 @@ class Trainer(object):
 
             else:
                 outputs, scores = self.model(src, tgt,segs, clss, mask_src, mask_tgt, mask_cls)
+                print("outputs", outputs.size())
+                print(outputs)
+                print("tgt", tgt.size())
+                print(tgt)
+                exit()
+
                 batch_stats = self.loss.sharded_compute_loss(batch, outputs, self.args.generator_shard_size, normalization)
             # print("outputs, ", outputs.size())
             # print(outputs)

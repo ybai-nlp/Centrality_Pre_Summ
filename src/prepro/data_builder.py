@@ -163,6 +163,7 @@ def greedy_selection(doc_sent_list, abstract_sent_list, summary_size):
         return re.sub(r'[^a-zA-Z0-9 ]', '', s)
 
     max_rouge = 0.0
+    # abstract_sent_list = [[each] for each in abstract_sent_list.split()]
     abstract = sum(abstract_sent_list, [])
     abstract = _rouge_clean(' '.join(abstract)).split()
     sents = [_rouge_clean(' '.join(s)).split() for s in doc_sent_list]

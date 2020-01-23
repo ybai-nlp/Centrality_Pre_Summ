@@ -95,12 +95,13 @@ class LossComputeBase(nn.Module):
         shard_state = self._make_shard_state(batch, output, copy_params)
         output = shard_state['output']
         target = shard_state['target']
-        # if len(shard_state) > 2:
-        #     copy_params_new = (shard_state['copy_params[0]'], shard_state['copy_params[1]'], shard_state['copy_params[2]'])
-        # else:
-        copy_params_new = (shard_state['copy_params[0]'], shard_state['copy_params[1]'])
+        if len(shard_state) > 4:
+            copy_params_new = (shard_state['copy_params[0]'], shard_state['copy_params[1]'], shard_state['copy_params[2]'])
+        else:
+            copy_params_new = (shard_state['copy_params[0]'], shard_state['copy_params[1]'])
 
         if copy_params is not None:
+            # print(len(copy_params))
             if len(copy_params) > 2:
                 _, batch_stats = self._compute_loss(batch, output, target, g=copy_params_new[1], ext_dist=copy_params_new[0], ext_loss=copy_params_new[2])
             else:
@@ -235,11 +236,22 @@ class LabelSmoothingLoss(nn.Module):
         """
         model_prob = self.one_hot.repeat(target.size(0), 1)
         model_prob.scatter_(1, target.unsqueeze(1), self.confidence)
+        # print("target = ", target.size())
+        # print(target)
+        # print("self.padding_idx = ", self.padding_idx)
+        # exit()
         model_prob.masked_fill_((target == self.padding_idx).unsqueeze(1), 0)
 
         return F.kl_div(output, model_prob, reduction='sum')
 
-
+class KnowledgeDistillLoss(nn.Module):
+    def __init__(self, ignore_index=-100):
+        super(KnowledgeDistillLoss, self).__init__()
+        self.padding_idx = ignore_index
+    def forward(self, output, target):
+        # target.masked_fill_((target == self.padding_idx).unsqueeze(1), 0)
+        loss = -(output * target).float()
+        return loss.sum()
 
 
 class PairwiseLoss(nn.Module):

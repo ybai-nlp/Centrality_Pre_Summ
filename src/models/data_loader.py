@@ -200,8 +200,6 @@ class DataIterator(object):
         if self.shuffle:
             random.shuffle(self.dataset)
         xs = self.dataset
-        # print("xs = ")
-        # print(xs)
         return xs
 
 
@@ -213,6 +211,7 @@ class DataIterator(object):
         src = ex['src']
         tgt = ex['tgt'][:self.args.max_tgt_len][:-1]+[2]
         src_sent_labels = ex['src_sent_labels']
+        # src_sent_labels = [each + 1 for each in ex['src_sent_labels']]
         segs = ex['segs']
         if(not self.args.use_interval):
             segs=[0]*len(segs)
@@ -259,6 +258,9 @@ class DataIterator(object):
         minibatch, size_so_far = [], 0
         for ex in data:
             minibatch.append(ex)
+            # print("ex = ")
+            # print(ex)
+            # exit()
             size_so_far = self.batch_size_fn(ex, len(minibatch))
             if size_so_far == batch_size:
                 yield minibatch
