@@ -78,11 +78,12 @@ def build_optim_bert(args, model, checkpoint):
     # for each in model.named_parameters():
     #     print(each)
     # params = [(n, p) for n, p in list(model.named_parameters()) if n.startswith('bert.model')]
-    params = [(n, p) for n, p in list(model.named_parameters()) if ('bert.model' in n) ]
+    params = [(n, p) for n, p in list(model.named_parameters()) if ('bert.model' in n) or ('xtractor' in n)]
     # print("params bert")
-    # print(params)
-    optim.set_parameters(params)
+    # for each in params:
+    #     print(each[0])
     # exit()
+    optim.set_parameters(params)
 
 
     return optim
@@ -113,12 +114,13 @@ def build_optim_dec(args, model, checkpoint):
             warmup_steps=args.warmup_steps_dec)
 
     # params = [(n, p) for n, p in list(model.named_parameters()) if not n.startswith('bert.model')]
-    params = [(n, p) for n, p in list(model.named_parameters()) if not ('bert.model' in n)]
+    params = [(n, p) for n, p in list(model.named_parameters()) if not (('bert.model' in n) or ('xtractor' in n))]
     # params = [(n, p) for n, p in list(model.named_parameters()) if not (n.startswith('bert.model') or ('abstractor' in n))]
     # print("params decoder: ")
     # print(params)
-    # for each in model.named_parameters():
-    #     print(each)
+    # print("params dec")
+    # for each in params:
+    #     print(each[0])
     # exit()
     optim.set_parameters(params)
 
@@ -620,7 +622,7 @@ class ExtSummarizer(nn.Module):
             tmp_q = q[i][:true_dim, :true_dim]
             # tmp_D = D[i].narrow(0,0,true_dim).narraw(1,0,true_dim)
             # q = q[i].narrow(0, 0, true_dim).narraw(1,0,true_dim)
-            D_ = torch.inverse(tmp_D)
+            # D_ = torch.inverse(tmp_D)
             # except:
             #     print("tmp_D = ", tmp_D.size())
             #     print(tmp_D)

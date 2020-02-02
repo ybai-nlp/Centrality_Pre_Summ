@@ -116,11 +116,11 @@ def abs_batch_size_fn(new, count):
         max_n_tokens=0
     # 选出最大句子数量,方便做pad
     max_n_sents = max(max_n_sents, len(tgt))
-    # 同上，这里应该可以直接一行代码搞定把
     max_size = max(max_size, max_n_sents)
 
-    #
+
     src_elements = count * max_size
+    # 最多不超过6个
     if (count > 6):
         return src_elements + 1e3
     return src_elements
