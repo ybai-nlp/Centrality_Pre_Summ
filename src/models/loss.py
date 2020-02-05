@@ -178,7 +178,7 @@ class LossComputeBase(nn.Module):
             # loss.div(float(normalization)).backward(retain_graph=True)
             # print("normalization = ", normalization)
             # print('copy2 = ', ext_loss.size())
-            (loss.div(float(normalization)) + ext_loss.mean() / 2).backward()
+            (loss.div(float(normalization)) + ext_loss.mean() * 2).backward()
             # print("loss1 ", loss.div(float(normalization)))
             # print("loss2 ", ext_loss.mean())
             # exit()
@@ -425,7 +425,7 @@ class NMTLossCompute(LossComputeBase):
         # print("ext_loss = ", ext_loss.size())
         # print(ext_loss)
         if ext_loss is not None:
-            stats = self._stats(loss.clone() + ext_loss.mean().clone(), scores, gtruth)
+            stats = self._stats(loss.clone() + ext_loss.mean().clone() * 2, scores, gtruth)
         else:
             stats = self._stats(loss.clone(), scores, gtruth)
 
